@@ -1,0 +1,924 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{bm}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\erfi}{\mathrm{erfi}}
+\newcommand{\erf}{\mathrm{erf}}
+\newcommand{\TV}{\mathrm{TV}}
+\newcommand{\diag}{\mathrm{diag}}
+\newcommand{\Tr}{\mathrm{Tr}}
+\newcommand{\sgn}{\mathrm{sgn}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{Distributed Phased Array Forward Scatter Radar:\\
+Mathematical Model and Signal Processing Algorithms\\[6pt]
+\large Version 5 --- Target Moving Along the $x$-axis}
+
+\author{D.~Huang}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document presents the complete mathematical model and detailed signal
+processing algorithms for a distributed phased array forward scatter radar
+(FSR) system in which the target moves along the $x$-axis with a constant
+offset~$z_T$ in the $z$-direction. The $K$ receiver nodes are uniformly
+spaced at half the Fresnel zone radius. A two-zone processing architecture
+is described: Zone~B (target far from baseline) employs DOA and Doppler
+analysis to estimate the target velocity~$v_x$, distance~$R$, and initial
+position~$x_0$; Zone~A (target near baseline) uses a gradient-based
+iterative method with total-variation (TV) denoising for shadow profile
+retrieval and simultaneous refinement of~$v_x$, $z_T$, and~$R$.
+The scale ambiguity inherent in single-receiver FSSR is shown to be broken
+by the known positions of multiple receiver nodes.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{System Geometry}
+\label{sec:geometry}
+%======================================================================
+
+\subsection{Coordinate System}
+
+We adopt a Cartesian coordinate system $(x,y,z)$ in which the incident
+plane wave travels in the $+y$ direction (the transmitter is effectively
+at $y\to-\infty$). A set of $K$ phased array receiver nodes is located
+along the $x$-axis on the plane $y=R$, i.e., node~$k$ is at position
+$(\bar{X}_k,\,R,\,0)$, $k=0,1,\ldots,K-1$. Each node comprises $N$
+antenna elements with half-wavelength spacing $d=\lambda/2$ along the
+$x$-axis. Element~$n$ of node~$k$ is at
+\begin{equation}
+  \mathbf{p}_{k,n} = \bigl(\bar{X}_k + n\,d,\;R,\;0\bigr),
+  \quad n=0,1,\ldots,N-1.
+  \label{eq:element_pos}
+\end{equation}
+All distances are \textbf{normalised to the wavelength}~$\lambda$
+throughout this document, so $\lambda=1$ and $d=\tfrac12$.
+
+\subsection{Node Placement}
+
+The $K$ nodes are uniformly spaced at half the Fresnel zone radius:
+\begin{equation}
+  \Delta X = \frac{\sqrt{R}}{2},
+  \label{eq:node_spacing}
+\end{equation}
+so that
+\begin{equation}
+  \bar{X}_k = \Bigl(k - \frac{K-1}{2}\Bigr)\,\frac{\sqrt{R}}{2},
+  \quad k=0,\ldots,K-1.
+  \label{eq:node_positions}
+\end{equation}
+
+\subsection{Target Model}
+
+The target is a two-dimensional object whose shadow silhouette on the
+$x'\text{--}z'$ plane is described by the binary function
+\begin{equation}
+  F(x',z') =
+  \begin{cases}
+    1, & (x',z') \in \Sigma,\\
+    0, & \text{otherwise},
+  \end{cases}
+  \label{eq:shadow_profile}
+\end{equation}
+where $\Sigma$ denotes the target silhouette and the primed coordinates
+are in a local frame centred on the target.
+
+The target centre moves along the $x$-axis with a constant offset $z_T$
+in the $z$-direction:
+\begin{equation}
+  \text{Target position at time } t:\quad
+  \bigl(x_T(t),\;0,\;z_T\bigr),
+  \label{eq:target_pos}
+\end{equation}
+where
+\begin{equation}
+  x_T(t) = x_0 + v_x\,t,
+  \label{eq:xT_of_t}
+\end{equation}
+$x_0$ is the initial $x$-coordinate and $v_x$ is the velocity in the
+$x$-direction (in wavelengths per time unit).
+
+%======================================================================
+\section{Forward Scatter Shadow Ratio (FSSR)}
+\label{sec:fssr}
+%======================================================================
+
+\subsection{Continuous FSSR Model}
+
+By the Fresnel diffraction formula, when the target centre is at
+$(x_T,0,z_T)$, the complex amplitude of the diffraction (shadow) field
+at a receiver located at $(\bar{X}_k,R,0)$ is
+\begin{equation}
+  E_D^{(k)}(x_T,z_T)
+  = \frac{e^{2\pi Ri}}{iR}
+    \iint F(x',z')\,
+    \exp\!\Bigl[\frac{i\pi}{R}\bigl((\Delta x_k+x')^2+(z_T+z')^2\bigr)\Bigr]
+    \,dx'\,dz',
+  \label{eq:ED}
+\end{equation}
+where
+\begin{equation}
+  \Delta x_k(t) \;\triangleq\; x_T(t) - \bar{X}_k = x_0 + v_x\,t - \bar{X}_k
+  \label{eq:delta_xk}
+\end{equation}
+is the $x$-offset between the target and node~$k$ at time~$t$.
+
+The FSSR at node~$k$ is defined as
+\begin{equation}
+  \boxed{
+  \varepsilon_k(t)
+  = \Bigl|1 + \frac{i}{R}\iint F(x',z')\,
+    \exp\!\Bigl[\frac{i\pi}{R}\bigl((\Delta x_k(t)+x')^2+(z_T+z')^2\bigr)
+    \Bigr]\,dx'\,dz'\Bigr|^2.}
+  \label{eq:fssr_continuous}
+\end{equation}
+
+\subsection{Pixel Discretisation}
+
+The retrieval region on the $x'\text{--}z'$ plane is divided into
+$N_{\rm pix}=M_z\times M_x$ square pixels of side~$2\delta$ (also
+normalised to~$\lambda$). Pixel $(p,q)$ has its centre at
+$(X'_q,Z'_p)$ and binary value
+\begin{equation}
+  P_{p,q} =
+  \begin{cases}
+    1, & (X'_q,Z'_p)\in\Sigma,\\
+    0, & \text{otherwise}.
+  \end{cases}
+  \label{eq:pixel_def}
+\end{equation}
+
+Substituting the pixel representation into~\eqref{eq:fssr_continuous},
+the FSSR is approximated as
+\begin{equation}
+  \varepsilon_k(t)
+  \approx \Bigl|1 + \frac{i}{R}\sum_{p=0}^{M_z-1}\sum_{q=0}^{M_x-1}
+  F_q^{(k)}(t)\,G_p\,P_{p,q}\Bigr|^2,
+  \label{eq:fssr_pixel}
+\end{equation}
+where the Fresnel coefficients are defined below.
+
+\subsection{$x$-Direction Fresnel Coefficient $F_q^{(k)}(t)$}
+\label{sec:Fq}
+
+\begin{equation}
+  F_q^{(k)}(t)
+  = \int_{X'_q-\delta}^{X'_q+\delta}
+    \exp\!\Bigl[\frac{i\pi}{R}\bigl(\Delta x_k(t)+x'\bigr)^2\Bigr]\,dx'
+  = \sqrt{\frac{R}{4i}}\,\Bigl[
+      \erfi\!\Bigl(\sqrt{\tfrac{i\pi}{R}}\,(X'_q+\delta+\Delta x_k(t))\Bigr)
+    - \erfi\!\Bigl(\sqrt{\tfrac{i\pi}{R}}\,(X'_q-\delta+\Delta x_k(t))\Bigr)
+    \Bigr],
+  \label{eq:Fq}
+\end{equation}
+where $\erfi(z)=-i\,\erf(iz)$ is the imaginary error function.
+
+\textbf{Key property:} $F_q^{(k)}(t)$ is \emph{time-varying} because
+$\Delta x_k(t)=x_0+v_x\,t-\bar{X}_k$ changes with time.
+
+\subsection{$z$-Direction Fresnel Coefficient $G_p$}
+\label{sec:Gp}
+
+\begin{equation}
+  G_p
+  = \int_{Z'_p-\delta}^{Z'_p+\delta}
+    \exp\!\Bigl[\frac{i\pi}{R}\bigl(z_T+z'\bigr)^2\Bigr]\,dz'
+  = \sqrt{\frac{R}{4i}}\,\Bigl[
+      \erfi\!\Bigl(\sqrt{\tfrac{i\pi}{R}}\,(Z'_p+\delta+z_T)\Bigr)
+    - \erfi\!\Bigl(\sqrt{\tfrac{i\pi}{R}}\,(Z'_p-\delta+z_T)\Bigr)
+    \Bigr].
+  \label{eq:Gp}
+\end{equation}
+
+\textbf{Key property:} $G_p$ is \emph{constant} (independent of time)
+because $z_T$ is fixed.
+
+\subsection{Vectorised FSSR Computation}
+
+Define vectors and matrices:
+\begin{align}
+  \mathbf{G} &= [G_0,\ldots,G_{M_z-1}]^T \in \C^{M_z}, \label{eq:G_vec}\\
+  \mathbf{F}^{(k)}(t_m) &= [F_0^{(k)}(t_m),\ldots,F_{M_x-1}^{(k)}(t_m)] \in \C^{M_x},
+  \label{eq:F_vec}\\
+  \mathbf{P} &\in \{0,1\}^{M_z\times M_x}. \label{eq:P_mat}
+\end{align}
+Then the FSSR at node~$k$, time step~$t_m$, is computed as:
+\begin{align}
+  \widetilde{\mathbf{P}} &= \mathbf{G}^T \mathbf{P} \;\in\; \C^{M_x},
+  \label{eq:GP}\\
+  S_k(t_m) &= \frac{i}{R}\,\mathbf{F}^{(k)}(t_m)\cdot\widetilde{\mathbf{P}}
+  \;\in\;\C,
+  \label{eq:Sk}\\
+  \varepsilon_k(t_m) &= |1+S_k(t_m)|^2. \label{eq:eps_from_S}
+\end{align}
+
+%======================================================================
+\section{Zone Classification}
+\label{sec:zones}
+%======================================================================
+
+\subsection{Per-Node Fresnel Parameter}
+
+For node~$k$ at time~$t$, the normalised distance is
+\begin{equation}
+  \xi_k(t) = \frac{|x_T(t)-\bar{X}_k|}{\sqrt{R}}
+  = \frac{|\Delta x_k(t)|}{\sqrt{R}}.
+  \label{eq:xi_k}
+\end{equation}
+
+The zone classification for node~$k$ at time~$t$ is:
+\begin{equation}
+  \text{Zone B:}\;\xi_k(t)>\xi_{\rm th},
+  \qquad
+  \text{Zone A:}\;\xi_k(t)\le\xi_{\rm th},
+  \label{eq:zone_def}
+\end{equation}
+where $\xi_{\rm th}$ is a threshold (typically~2).
+
+\subsection{Sequential Zone Entry}
+
+Since the target moves in the $x$-direction, different nodes enter Zone~A
+at different times. Node~$k$ enters Zone~A when
+\begin{equation}
+  |x_0 + v_x\,t - \bar{X}_k| \le \xi_{\rm th}\sqrt{R},
+  \label{eq:zone_a_entry}
+\end{equation}
+i.e., the target crosses node~$k$'s Fresnel region at time
+\begin{equation}
+  t_k^* = \frac{\bar{X}_k - x_0}{v_x}.
+  \label{eq:crossing_time}
+\end{equation}
+For $v_x<0$ (target approaching from positive~$x$), rightmost nodes are
+crossed first.
+
+%======================================================================
+\section{Zone B: Parameter Estimation}
+\label{sec:zone_b}
+%======================================================================
+
+When $\xi_k\gg 1$, the target is well beyond the Fresnel zone of node~$k$
+and appears as a point source. This regime enables estimation of the
+target's motion parameters.
+
+\subsection{Received Signal Model (Zone B)}
+\label{sec:zone_b_signal}
+
+At element~$n$ of node~$k$, the received signal is
+\begin{equation}
+  x_{k,n}(t) = A_D + G_T\,e^{j\psi_k(t)}\,e^{j\pi n\,\ell_x^{(k)}(t)}
+  + \zeta_{k,n}(t),
+  \label{eq:rx_signal}
+\end{equation}
+where:
+\begin{itemize}
+  \item $A_D=1$: direct-path amplitude (normalised);
+  \item $G_T = 2\sqrt{\pi}\,A_\Sigma / R$: scattered-signal amplitude,
+    with $A_\Sigma=\sum_{p,q}P_{p,q}\,(2\delta)^2$ the target's shadow area;
+  \item $\psi_k(t) = \pi\bigl(\Delta x_k(t)^2+z_T^2\bigr)/R$:
+    propagation phase;
+  \item $\ell_x^{(k)}(t) = \Delta x_k(t)/D_k(t)$: $x$-direction cosine,
+    with $D_k(t)=\sqrt{\Delta x_k(t)^2+R^2+z_T^2}$;
+  \item $\zeta_{k,n}\sim\mathcal{CN}(0,\sigma^2)$: AWGN, where
+    $\sigma^2=10^{-\text{SNR}_{\rm dB}/10}$ (referenced to $|A_D|^2=1$).
+\end{itemize}
+
+\subsection{DOA Estimation}
+\label{sec:doa}
+
+The $x$-direction cosine $\ell_x^{(k)}(t)$ can be estimated at each
+time snapshot using MUSIC, ESPRIT, or spatial DFT (see
+Section~\ref{sec:doa_algs}). Because the target is far from the nodes
+in Zone~B, $|\ell_x^{(k)}|$ is large and easily resolvable.
+
+\subsubsection{MUSIC}
+
+The spatial covariance matrix at node~$k$ is
+\begin{equation}
+  \hat{\mathbf{R}}_k = \frac{1}{M}\sum_{m=1}^{M}\mathbf{x}_k(t_m)\,
+  \mathbf{x}_k^H(t_m),
+  \label{eq:covariance}
+\end{equation}
+optionally with forward-backward averaging:
+$\hat{\mathbf{R}}_k^{\rm fb}=\tfrac12(\hat{\mathbf{R}}_k +
+\mathbf{J}\hat{\mathbf{R}}_k^*\mathbf{J})$, where $\mathbf{J}$ is
+the exchange matrix. Eigendecomposition yields signal subspace
+$\mathbf{E}_s$ and noise subspace $\mathbf{E}_n$. The MUSIC
+pseudo-spectrum is
+\begin{equation}
+  P_{\rm MUSIC}(u) = \frac{1}{\mathbf{a}^H(u)\,
+  \mathbf{E}_n\mathbf{E}_n^H\,\mathbf{a}(u)},
+  \label{eq:music_spectrum}
+\end{equation}
+where $\mathbf{a}(u)=[1,e^{j\pi u},\ldots,e^{j\pi(N-1)u}]^T$ is the
+steering vector and $u=\ell_x$ is the direction cosine.
+
+\subsubsection{ESPRIT}
+
+From the signal subspace $\mathbf{E}_s$, define two subarrays:
+$\mathbf{E}_1=\mathbf{E}_s(1{:}N{-}1,:)$ and
+$\mathbf{E}_2=\mathbf{E}_s(2{:}N,:)$. The shift-invariance matrix is
+\begin{equation}
+  \bm{\Phi} = \mathbf{E}_1^\dagger\,\mathbf{E}_2,
+  \label{eq:esprit_phi}
+\end{equation}
+whose eigenvalues $\lambda_i=e^{j\pi u_i}$ yield the direction cosines
+$u_i=\angle(\lambda_i)/\pi$.
+
+\subsection{DOA Time Series and Linear Fit}
+\label{sec:doa_fit}
+
+Using a sliding window of~$W$ snapshots, we obtain a time series of DOA
+estimates $\hat{\ell}_x^{(k)}(t_m)$ at times $t_m$. In the far-field
+approximation ($D_k\approx R$), the DOA is linear in time:
+\begin{equation}
+  \ell_x^{(k)}(t) \approx \frac{\Delta x_k(t)}{R}
+  = \frac{x_0-\bar{X}_k}{R} + \frac{v_x}{R}\,t
+  \;\triangleq\; \alpha_k + \beta\,t,
+  \label{eq:doa_linear}
+\end{equation}
+where
+\begin{align}
+  \beta &= \frac{v_x}{R} \quad\text{(DOA rate, same for all nodes)},
+  \label{eq:beta}\\
+  \alpha_k &= \frac{x_0-\bar{X}_k}{R}
+  \quad\text{(DOA intercept, node-dependent)}.
+  \label{eq:alpha}
+\end{align}
+
+A linear fit $\hat{\ell}_x^{(k)}(t)=\hat{\alpha}_k+\hat{\beta}_k\,t$
+is applied to each node's DOA time series. The averaged DOA rate is
+\begin{equation}
+  \bar{\beta} = \frac{1}{K}\sum_{k=0}^{K-1}\hat{\beta}_k.
+  \label{eq:beta_avg}
+\end{equation}
+
+\subsection{Doppler Analysis}
+\label{sec:doppler}
+
+The propagation phase rate (instantaneous Doppler frequency) at node~$k$
+is
+\begin{equation}
+  f_D^{(k)}(t) = \frac{1}{2\pi}\frac{d\psi_k}{dt}
+  = \frac{v_x\,\Delta x_k(t)}{R}.
+  \label{eq:doppler_inst}
+\end{equation}
+This is also linear in time:
+\begin{equation}
+  f_D^{(k)}(t) = f_0^{(k)} + \dot{f}\,t,
+  \label{eq:doppler_linear}
+\end{equation}
+where
+\begin{align}
+  \dot{f} &= \frac{v_x^2}{R}
+  \quad\text{(Doppler chirp rate, same for all nodes)},
+  \label{eq:f_dot}\\
+  f_0^{(k)} &= \frac{v_x(x_0-\bar{X}_k)}{R}.
+  \label{eq:f0}
+\end{align}
+
+The Doppler is estimated via a short-time Fourier transform (STFT) on
+the beamformed signal steered toward the target DOA~$\hat{\ell}_x$:
+\begin{equation}
+  y_k(t) = \frac{1}{N}\sum_{n=0}^{N-1}
+  x_{k,n}(t)\,e^{-j\pi n\,\hat{\ell}_x},
+  \label{eq:beamformed}
+\end{equation}
+followed by windowed FFT on overlapping segments.
+
+A linear fit is applied to the Doppler time series from each node to
+obtain $\hat{\dot{f}}_k$. The averaged chirp rate is
+\begin{equation}
+  \bar{\dot{f}} = \frac{1}{K}\sum_{k=0}^{K-1}\hat{\dot{f}}_k.
+  \label{eq:fdot_avg}
+\end{equation}
+
+\subsection{Joint $v_x$, $R$, $x_0$ Estimation}
+\label{sec:joint_zone_b}
+
+Combining the DOA rate~\eqref{eq:beta} and Doppler chirp
+rate~\eqref{eq:f_dot}:
+
+\begin{equation}
+  \boxed{
+  |v_x| = \frac{|\bar{\dot{f}}|}{|\bar{\beta}|},
+  \qquad
+  R = \frac{|\bar{\dot{f}}|}{\bar{\beta}^2},
+  \qquad
+  x_0 = \bar{\alpha}\,R + \bar{X},}
+  \label{eq:vx_R_x0}
+\end{equation}
+where $\bar{\alpha}=\frac{1}{K}\sum_k\hat{\alpha}_k$ and
+$\bar{X}=\frac{1}{K}\sum_k\bar{X}_k$.
+
+The sign of $v_x$ is determined from the DOA trend: $\sgn(v_x)=\sgn(\bar{\beta})$
+(assuming $R>0$).
+
+\subsection{$z_T$ Initial Estimate}
+\label{sec:zT_init}
+
+The constant offset $z_T$ does not directly affect the DOA or Doppler
+in the far-field approximation. An initial estimate $\hat{z}_T^{(0)}=0$
+is used, to be refined during Zone~A processing
+(Section~\ref{sec:joint_zone_a}).
+
+%======================================================================
+\section{Zone A: Gradient Descent with TV Denoising}
+\label{sec:zone_a}
+%======================================================================
+
+\subsection{Problem Formulation}
+
+Given noisy FSSR samples $b_{k,\ell}$ from $K$ nodes at time steps
+$t_\ell$ (each node's Zone~A window), the shadow profile retrieval is
+formulated as:
+\begin{equation}
+  \hat{\mathbf{P}} = \argmin_{\mathbf{P}}
+  \bigl\{\mathcal{F}(\mathbf{P}) + \tau\,\mathcal{R}(\mathbf{P})\bigr\},
+  \label{eq:zone_a_problem}
+\end{equation}
+where
+\begin{equation}
+  \mathcal{F}(\mathbf{P})
+  = \sum_{k=0}^{K-1}\sum_{\ell=1}^{L_k}
+  \Bigl[\varepsilon_k(t_\ell;\mathbf{P}) - b_{k,\ell}\Bigr]^2
+  \label{eq:fidelity}
+\end{equation}
+is the fidelity term, and
+\begin{equation}
+  \mathcal{R}(\mathbf{P}) = \TV(\mathbf{P})
+  = \sum_{p,q}\sqrt{(P_{p,q}-P_{p+1,q})^2+(P_{p,q}-P_{p,q+1})^2}
+  \label{eq:tv_reg}
+\end{equation}
+is the isotropic total variation regulariser, with $\tau>0$ being the
+tradeoff parameter. Boundary convention:
+$P_{M_z,q}=P_{p,M_x}=0$.
+
+\subsection{Gradient of the Fidelity Function}
+\label{sec:gradient}
+
+For FSSR sample $(k,\ell)$, define
+\begin{equation}
+  S_{k,\ell} = \frac{i}{R}\sum_{p,q}F_q^{(k)}(t_\ell)\,G_p\,P_{p,q}
+  \label{eq:Skl}
+\end{equation}
+so that $\varepsilon_k(t_\ell)=|1+S_{k,\ell}|^2$.
+
+The contribution of sample $(k,\ell)$ to the fidelity is
+\begin{equation}
+  \mathcal{F}_{k,\ell}(\mathbf{P})
+  = \bigl[\varepsilon_k(t_\ell)-b_{k,\ell}\bigr]^2.
+  \label{eq:fidelity_kl}
+\end{equation}
+
+The partial derivative with respect to pixel $P_{p,q}$ is:
+\begin{equation}
+  \frac{\partial\varepsilon_k}{\partial P_{p,q}}
+  = 2\,\mathrm{Re}\!\left[\frac{i}{R}\,F_q^{(k)}(t_\ell)\,G_p\,
+  \overline{(1+S_{k,\ell})}\right],
+  \label{eq:deps_dP}
+\end{equation}
+hence
+\begin{equation}
+  \boxed{
+  \frac{\partial\mathcal{F}_{k,\ell}}{\partial P_{p,q}}
+  = 4\bigl[\varepsilon_k(t_\ell)-b_{k,\ell}\bigr]\,
+  \mathrm{Re}\!\left[\frac{i}{R}\,F_q^{(k)}(t_\ell)\,G_p\,
+  \overline{(1+S_{k,\ell})}\right].}
+  \label{eq:grad_fidelity}
+\end{equation}
+
+In matrix form, the gradient at sample $(k,\ell)$ is
+\begin{equation}
+  \nabla_{\mathbf{P}}\mathcal{F}_{k,\ell}
+  = 4\bigl[\varepsilon_k-b_{k,\ell}\bigr]\,
+  \mathrm{Re}\!\Bigl[\frac{i}{R}\,\overline{(1+S_{k,\ell})}\;
+  \mathbf{G}\otimes\mathbf{F}^{(k)}(t_\ell)\Bigr]
+  \;\in\;\R^{M_z\times M_x},
+  \label{eq:grad_matrix}
+\end{equation}
+where $\otimes$ denotes outer product.
+
+The total gradient is
+\begin{equation}
+  \nabla_{\mathbf{P}}\mathcal{F}
+  = \sum_{k=0}^{K-1}\sum_{\ell=1}^{L_k}
+  \nabla_{\mathbf{P}}\mathcal{F}_{k,\ell}.
+  \label{eq:grad_total}
+\end{equation}
+
+\subsection{Algorithm 1: Shadow Profile Retrieval}
+\label{sec:alg1}
+
+\begin{algorithm}[H]
+\caption{Gradient descent with TV denoising for shadow profile retrieval}
+\label{alg:profile_retrieval}
+\begin{algorithmic}[1]
+\Require FSSR samples $\{b_{k,\ell}\}$, step size $\gamma>0$,
+TV parameter $\tau>0$, denoising iterations $N_D$
+\State Initialise: $\hat{\mathbf{P}}_0\leftarrow\mathbf{0}$,
+$\mathbf{s}_0\leftarrow\hat{\mathbf{P}}_0$, $q_0\leftarrow 1$
+\For{$t=1,2,\ldots,N_S$}
+  \State $\gamma_t \leftarrow \gamma/\sqrt{t}$
+  \Comment{Decaying step size}
+  \State $\mathbf{z}_t \leftarrow \mathbf{s}_{t-1}
+    - \frac{\gamma_t}{L_{\rm tot}}\,
+    \nabla_{\mathbf{P}}\mathcal{F}(\mathbf{s}_{t-1})$
+  \Comment{Gradient step ($L_{\rm tot}=\sum_k L_k$)}
+  \State $\hat{\mathbf{P}}_t \leftarrow
+    \mathrm{prox}_{\mathcal{R}}(\mathbf{z}_t,\;\gamma_t\tau)$
+  \Comment{TV denoising (Algorithm~\ref{alg:tv_denoise})}
+  \State $q_t \leftarrow (1+\sqrt{1+4q_{t-1}^2})/2$
+  \Comment{Nesterov acceleration}
+  \State $\mathbf{s}_t \leftarrow \hat{\mathbf{P}}_t
+    + \frac{q_{t-1}-1}{q_t}(\hat{\mathbf{P}}_t-\hat{\mathbf{P}}_{t-1})$
+\EndFor
+\State \Return $\hat{\mathbf{P}}_{N_S}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Algorithm 2: TV Denoising (Proximal Operator)}
+\label{sec:alg2}
+
+The proximal operator
+$\mathrm{prox}_{\mathcal{R}}(\mathbf{z},\delta)$ solves
+\begin{equation}
+  \argmin_{\mathbf{P}}\Bigl\{
+  \tfrac{1}{2\delta}\|\mathbf{P}-\mathbf{z}\|^2
+  + \TV(\mathbf{P})\Bigr\}
+  \quad\text{subject to}\quad 0\le P_{p,q}\le 1.
+  \label{eq:prox_problem}
+\end{equation}
+
+This is solved by a dual iterative method. Define the following
+operators.
+
+\paragraph{Discrete gradient $\mathcal{L}^T$:}
+For image $\mathbf{m}\in\R^{M_z\times M_x}$,
+$\mathcal{L}^T(\mathbf{m})=(\mathbf{p},\mathbf{q})$ where
+\begin{equation}
+  p_{i,j}=m_{i,j}-m_{i+1,j},\quad
+  q_{i,j}=m_{i,j}-m_{i,j+1}.
+  \label{eq:LT}
+\end{equation}
+
+\paragraph{Discrete divergence $\mathcal{L}$:}
+For $(\mathbf{p},\mathbf{q})\in\R^{(M_z-1)\times M_x}\times
+\R^{M_z\times(M_x-1)}$,
+$\mathcal{L}(\mathbf{p},\mathbf{q})\in\R^{M_z\times M_x}$ with
+\begin{equation}
+  [\mathcal{L}(\mathbf{p},\mathbf{q})]_{i,j}
+  = p_{i,j}+q_{i,j}-p_{i-1,j}-q_{i,j-1},
+  \label{eq:L}
+\end{equation}
+with boundary conditions $p_{0,j}=q_{i,0}=0$ and
+$[\mathcal{L}]_{M_z,M_x}=0$.
+
+\paragraph{Clipping $\mathcal{H}_C$:}
+\begin{equation}
+  [\mathcal{H}_C(\mathbf{m})]_{i,j}
+  = \min\bigl(1,\max(0,\,m_{i,j})\bigr).
+  \label{eq:HC}
+\end{equation}
+
+\paragraph{Ball projection $\mathcal{H}_B$:}
+For $(\mathbf{p},\mathbf{q})$, project each pair onto the unit ball:
+\begin{equation}
+  r_{i,j} = \frac{p_{i,j}}{\max\!\bigl(1,\sqrt{p_{i,j}^2+q_{i,j}^2}\bigr)},
+  \qquad
+  s_{i,j} = \frac{q_{i,j}}{\max\!\bigl(1,\sqrt{p_{i,j}^2+q_{i,j}^2}\bigr)}.
+  \label{eq:HB}
+\end{equation}
+
+\begin{algorithm}[H]
+\caption{TV denoising proximal operator: $\mathrm{prox}_{\mathcal{R}}(\mathbf{z},\delta)$}
+\label{alg:tv_denoise}
+\begin{algorithmic}[1]
+\Require Pixel vector $\mathbf{z}$, regularisation $\delta$
+\State Reshape $\mathbf{z}$ to image $\mathbf{m}\in\R^{M_z\times M_x}$
+\State $(\mathbf{p}_0,\mathbf{q}_0)\leftarrow(\mathbf{0},\mathbf{0})$;
+$(\mathbf{r}_1,\mathbf{s}_1)\leftarrow(\mathbf{p}_0,\mathbf{q}_0)$;
+$w_1\leftarrow 1$
+\For{$t=1,2,\ldots,N_D$}
+  \State $(\mathbf{p}_t,\mathbf{q}_t) \leftarrow
+    \mathcal{H}_B\!\Bigl[(\mathbf{r}_t,\mathbf{s}_t)
+    + \frac{1}{8\delta}\,\mathcal{L}^T\!\bigl(
+    \mathcal{H}_C[\mathbf{m}-\delta\,\mathcal{L}(\mathbf{r}_t,\mathbf{s}_t)]
+    \bigr)\Bigr]$
+  \State $w_{t+1}\leftarrow(1+\sqrt{1+4w_t^2})/2$
+  \State $(\mathbf{r}_{t+1},\mathbf{s}_{t+1})\leftarrow
+    (\mathbf{p}_t,\mathbf{q}_t)
+    + \frac{w_t-1}{w_{t+1}}[(\mathbf{p}_t,\mathbf{q}_t)-
+    (\mathbf{p}_{t-1},\mathbf{q}_{t-1})]$
+\EndFor
+\State $\hat{\mathbf{x}}\leftarrow
+  \mathcal{H}_C[\mathbf{m}-\delta\,\mathcal{L}(\mathbf{r}_{N_D},\mathbf{s}_{N_D})]$
+\State \Return $\hat{\mathbf{x}}$ (reshaped to vector)
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Algorithm 3: Simultaneous Motion Parameter Estimation}
+\label{sec:alg3}
+
+Building on Algorithm~1, we now jointly optimise the velocity $v_x$,
+offset $z_T$, and (optionally) distance $R$, following the approach
+of~\cite{IETDraft4}. The cost function is
+\begin{equation}
+  C(\hat{\mathbf{P}},v_x,z_T,R)
+  = \sum_{k,\ell}\Bigl[b_{k,\ell}
+  - \varepsilon_k(t_\ell;\hat{\mathbf{P}},v_x,z_T,R)\Bigr]^2,
+  \label{eq:cost_joint}
+\end{equation}
+where $\hat{\mathbf{P}}$ is the profile retrieved by Algorithm~1 for
+the current parameter values.
+
+The gradients with respect to the motion parameters are computed
+numerically:
+\begin{align}
+  \frac{\partial C}{\partial v_x}
+  &\approx \frac{C(\hat{\mathbf{P}},v_x+\Delta v,z_T,R)
+  - C(\hat{\mathbf{P}},v_x,z_T,R)}{\Delta v},
+  \label{eq:grad_vx}\\
+  \frac{\partial C}{\partial z_T}
+  &\approx \frac{C(\hat{\mathbf{P}},v_x,z_T+\Delta z,R)
+  - C(\hat{\mathbf{P}},v_x,z_T,R)}{\Delta z},
+  \label{eq:grad_zT}\\
+  \frac{\partial C}{\partial R}
+  &\approx \frac{C(\hat{\mathbf{P}},v_x,z_T,R+\Delta R)
+  - C(\hat{\mathbf{P}},v_x,z_T,R)}{\Delta R}.
+  \label{eq:grad_R}
+\end{align}
+
+\begin{algorithm}[H]
+\caption{Joint shadow profile and motion parameter estimation}
+\label{alg:joint_estimation}
+\begin{algorithmic}[1]
+\Require FSSR samples $\{b_{k,\ell}\}$; initial estimates
+$\hat{v}_x^{(0)}$, $\hat{z}_T^{(0)}$, $\hat{R}^{(0)}$, $\hat{x}_0$
+(fixed); step sizes $\gamma_v,\gamma_z,\gamma_R$; perturbations
+$\Delta v,\Delta z,\Delta R$
+\State $q_0\leftarrow 1$
+\For{$n=1,2,\ldots,N_V$}
+  \State \textbf{Step 1:} Compute target trajectories
+    $x_T^{(k)}(t_\ell)=\hat{x}_0+\hat{v}_x^{(n-1)}\,t_\ell$
+  \State \textbf{Step 2:}
+    $\hat{\mathbf{P}}_n \leftarrow
+    \text{Algorithm~\ref{alg:profile_retrieval}}
+    (\{b_{k,\ell}\},\;\hat{v}_x^{(n-1)},\;\hat{z}_T^{(n-1)},\;
+    \hat{R}^{(n-1)})$
+  \State \textbf{Step 3:} Compute numerical gradients
+    \eqref{eq:grad_vx}--\eqref{eq:grad_R}
+  \State $\gamma_v^{(n)}\leftarrow\gamma_v/n$;\quad
+    $\gamma_z^{(n)}\leftarrow\gamma_z/n$;\quad
+    $\gamma_R^{(n)}\leftarrow\gamma_R/n$
+  \State $\tilde{v}_x \leftarrow \hat{v}_x^{(n-1)}
+    - \gamma_v^{(n)}\,\partial C/\partial v_x$
+  \State $\tilde{z}_T \leftarrow \hat{z}_T^{(n-1)}
+    - \gamma_z^{(n)}\,\partial C/\partial z_T$
+  \State $\tilde{R} \leftarrow \hat{R}^{(n-1)}
+    - \gamma_R^{(n)}\,\partial C/\partial R$
+  \State \textbf{Step 4:} Nesterov acceleration:
+  \State \quad $q_n\leftarrow(1+\sqrt{1+4q_{n-1}^2})/2$
+  \State \quad $\hat{v}_x^{(n)}\leftarrow\tilde{v}_x
+    + \frac{q_{n-1}-1}{q_n}(\tilde{v}_x-\hat{v}_x^{(n-1)})$
+  \State \quad $\hat{z}_T^{(n)}\leftarrow\tilde{z}_T
+    + \frac{q_{n-1}-1}{q_n}(\tilde{z}_T-\hat{z}_T^{(n-1)})$
+  \State \quad $\hat{R}^{(n)}\leftarrow\max\!\bigl(R_{\min},\;\tilde{R}
+    + \frac{q_{n-1}-1}{q_n}(\tilde{R}-\hat{R}^{(n-1)})\bigr)$
+\EndFor
+\State \textbf{Step 5:} Final retrieval with converged parameters using
+  Algorithm~\ref{alg:profile_retrieval} (extended iterations)
+\State Hard-threshold: $\hat{P}_{p,q}=1$ if $\hat{P}_{p,q}\ge 0.5$,
+  else $0$
+\State \Return $\hat{\mathbf{P}},\;\hat{v}_x,\;\hat{z}_T,\;\hat{R}$
+\end{algorithmic}
+\end{algorithm}
+
+%======================================================================
+\section{Scale Ambiguity Analysis}
+\label{sec:ambiguity}
+%======================================================================
+
+\subsection{Single-Receiver Ambiguity}
+
+For a single receiver at the origin, if coordinates and dimensions are
+scaled by~$\mu$ and the distance by~$\mu^2$:
+\begin{equation}
+  v_x\to\mu v_x,\quad z_T\to\mu z_T,\quad R\to\mu^2 R,\quad
+  F'(x',z')=F(x'/\mu,\,z'/\mu),
+  \label{eq:scale_transform}
+\end{equation}
+then the FSSR~\eqref{eq:fssr_continuous} is invariant. This was
+proven in~\cite{IETDraft4}.
+
+\subsection{Ambiguity Breaking with Multiple Nodes}
+
+With $K$ receivers at known positions $\bar{X}_k$ (which are
+\emph{not scaled}), the FSSR at node~$k$ depends on
+$\Delta x_k=x_T-\bar{X}_k$. Under scaling, $x_T\to\mu x_T$, so
+\begin{equation}
+  \Delta x_k\to \mu\,x_T - \bar{X}_k \ne \mu\,\Delta x_k
+  \quad\text{(unless } \bar{X}_k=0 \text{)}.
+  \label{eq:ambiguity_broken}
+\end{equation}
+
+Therefore, the scale ambiguity is broken by having multiple receivers at
+distinct, known positions. The degree of disambiguation depends on the
+ratio $|\bar{X}_k|/|x_T|$:
+\begin{itemize}
+  \item When $|\bar{X}_k|\ll|x_T|$ (Zone~B): ambiguity approximately holds.
+  \item When $|\bar{X}_k|\sim|x_T|$ (Zone~A): ambiguity is significantly
+    broken, enabling direct estimation of~$R$.
+\end{itemize}
+
+%======================================================================
+\section{DOA Estimation Algorithms}
+\label{sec:doa_algs}
+%======================================================================
+
+\subsection{Spatial DFT (FFT)}
+
+The simplest approach: compute the $N$-point DFT of the received signal
+(after subtracting the element mean to remove the broadside direct path)
+and identify the peak:
+\begin{equation}
+  \hat{\ell}_x = \argmax_{|u|>u_{\min}}
+  \frac{1}{M}\sum_{m=1}^M |S_k(t_m,u)|^2,
+  \label{eq:fft_doa}
+\end{equation}
+where $S_k(t_m,u)=\sum_{n=0}^{N-1}x_{k,n}(t_m)\,e^{-j\pi nu}$ and
+$u_{\min}=2/N$ (Rayleigh limit). Sub-bin accuracy is obtained via
+parabolic interpolation.
+
+\subsection{MUSIC}
+
+As described in Section~\ref{sec:doa}, with the MUSIC pseudo-spectrum
+\eqref{eq:music_spectrum}. The target DOA is the highest peak away from
+broadside. MUSIC achieves super-resolution (below the Rayleigh limit),
+which is beneficial when the DOA becomes small near Zone~A entry.
+
+\subsection{LS-ESPRIT}
+
+As described in Section~\ref{sec:doa}, using the shift-invariance
+property~\eqref{eq:esprit_phi}. ESPRIT does not require a spectral
+search grid and provides closed-form estimates.
+
+\subsection{Exact DOA-to-Position Inversion}
+
+Given the estimated direction cosine $\hat{\ell}_x$ and the far-field
+approximation $\ell_x\approx\Delta x/R$, the position offset is
+$\Delta x\approx R\,\hat{\ell}_x$. For improved accuracy, the exact
+inversion is
+\begin{equation}
+  \Delta x = \frac{R\,\hat{\ell}_x}{\sqrt{1-\hat{\ell}_x^2}},
+  \label{eq:exact_inversion}
+\end{equation}
+since $\ell_x=\Delta x/\sqrt{\Delta x^2+R^2+z_T^2}$.
+
+%======================================================================
+\section{Noise Model}
+\label{sec:noise}
+%======================================================================
+
+\subsection{Complex Signal Noise (Zone~B)}
+
+In Zone~B, noise is added to the complex received signal. AWGN is
+referenced to the direct-path power $|A_D|^2=1$:
+\begin{equation}
+  \sigma^2 = 10^{-\text{SNR}_{\rm dB}/10},
+  \qquad
+  \zeta_{k,n}\sim\mathcal{CN}(0,\sigma^2).
+  \label{eq:noise_complex}
+\end{equation}
+
+\subsection{FSSR Noise (Zone~A)}
+
+Noise on FSSR samples is real-valued AWGN, also referenced to the
+direct-path power:
+\begin{equation}
+  b_{k,\ell} = \varepsilon_k(t_\ell) + w_{k,\ell},\qquad
+  w_{k,\ell}\sim\mathcal{N}(0,\sigma_{\rm FSSR}^2),\quad
+  \sigma_{\rm FSSR}^2=10^{-\text{SNR}_{\rm dB}/10}.
+  \label{eq:noise_fssr}
+\end{equation}
+
+%======================================================================
+\section{Simulation Parameters}
+\label{sec:params}
+%======================================================================
+
+\begin{table}[H]
+\centering
+\caption{Default simulation parameters}
+\label{tab:params}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Symbol} & \textbf{Default} & \textbf{Description} \\
+\midrule
+$K$ & 4 & Number of receiver nodes \\
+$N$ & 16 & Elements per node \\
+$d$ & 0.5 & Element spacing ($\lambda/2$) \\
+$R$ & $10^4$ & Target-to-receiver distance ($\lambda$) \\
+$\Delta X$ & $\sqrt{R}/2=50$ & Inter-node spacing ($\lambda$) \\
+$x_0$ & 2000 & Initial target $x$-coordinate ($\lambda$) \\
+$v_x$ & $-1$ & Target velocity ($\lambda$/time) \\
+$z_T$ & 10 & Constant $z$-offset ($\lambda$) \\
+$M_z\times M_x$ & $20\times 20$ & Pixel grid \\
+$2\delta$ & 10 & Pixel side ($\lambda$) \\
+$\xi_{\rm th}$ & 2.0 & Zone transition threshold \\
+SNR & 20\,dB & Signal-to-noise ratio \\
+\midrule
+$\gamma$ & 5000 & Step size (Algorithm~\ref{alg:profile_retrieval}) \\
+$\tau$ & $10^{-6}$ & TV regularisation parameter \\
+$N_S$ & 200 & Retrieval iterations \\
+$N_D$ & 20 & Denoising iterations \\
+$N_V$ & 20 & Outer velocity iterations (Algorithm~\ref{alg:joint_estimation}) \\
+$\gamma_v$ & 0.5 & Velocity step size \\
+$\Delta v$ & 0.01 & Velocity perturbation \\
+$\gamma_z$ & 0.5 & $z_T$ step size \\
+$\Delta z$ & 0.5 & $z_T$ perturbation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%======================================================================
+\section{Processing Pipeline Summary}
+\label{sec:pipeline}
+%======================================================================
+
+\begin{enumerate}
+  \item \textbf{FSSR Generation:} For each node~$k$, compute clean FSSR
+    via~\eqref{eq:fssr_pixel} and add noise~\eqref{eq:noise_fssr}.
+
+  \item \textbf{Zone Classification:} Compute per-node
+    $\xi_k(t)$~\eqref{eq:xi_k}. Identify Zone~B (all nodes far) and
+    Zone~A windows (per node).
+
+  \item \textbf{Zone~B Processing:}
+    \begin{enumerate}
+      \item Generate received signals~\eqref{eq:rx_signal} at all nodes.
+      \item Estimate DOA time series using MUSIC/ESPRIT/FFT.
+      \item Linear fit~\eqref{eq:doa_linear}: extract $\hat{\beta}$,
+        $\hat{\alpha}_k$.
+      \item Estimate Doppler time series via STFT on beamformed
+        signal~\eqref{eq:beamformed}.
+      \item Linear fit~\eqref{eq:doppler_linear}: extract $\hat{\dot{f}}$.
+      \item Compute $\hat{v}_x$, $\hat{R}$, $\hat{x}_0$
+        via~\eqref{eq:vx_R_x0}.
+    \end{enumerate}
+
+  \item \textbf{Zone~A Processing:}
+    \begin{enumerate}
+      \item Collect FSSR samples from each node's Zone~A window.
+      \item Compute estimated target trajectory:
+        $x_T^{(k)}(t_\ell)=\hat{x}_0+\hat{v}_x\,t_\ell$.
+      \item Run Algorithm~\ref{alg:joint_estimation}: joint retrieval of
+        shadow profile $\hat{\mathbf{P}}$ and refined $\hat{v}_x$,
+        $\hat{z}_T$, $\hat{R}$.
+    \end{enumerate}
+
+  \item \textbf{Output:} Binary shadow profile
+    $\hat{\mathbf{P}}\in\{0,1\}^{M_z\times M_x}$, refined motion
+    parameters $\hat{v}_x$, $\hat{z}_T$, $\hat{R}$.
+\end{enumerate}
+
+\begin{thebibliography}{9}
+
+\bibitem{Paper1}
+X.~Shen and D.~Huang,
+``Pixel based shadow profile retrieval in forward scatter radar using
+forward scatter shadow ratio,''
+\emph{IEEE Access}, vol.~12, pp.~60467--60474, 2024.
+
+\bibitem{Draft5}
+X.~Shen and D.~Huang,
+``A gradient-based method with denoising for target shadow profile
+retrieval in forward scatter radar,''
+submitted, 2025.
+
+\bibitem{IETDraft4}
+X.~Shen and D.~Huang,
+``Retrieving target motion parameters together with target shadow
+profile in forward scatter radar,''
+submitted to \emph{IET Radar, Sonar \& Navigation}, 2025.
+
+\end{thebibliography}
+
+\end{document}
