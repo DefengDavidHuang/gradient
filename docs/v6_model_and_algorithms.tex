@@ -1,0 +1,1264 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{bm}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\erfi}{\mathrm{erfi}}
+\newcommand{\erf}{\mathrm{erf}}
+\newcommand{\TV}{\mathrm{TV}}
+\newcommand{\diag}{\mathrm{diag}}
+\newcommand{\Tr}{\mathrm{Tr}}
+\newcommand{\sgn}{\mathrm{sgn}}
+\newcommand{\sinc}{\mathrm{sinc}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{Distributed Phased Array Forward Scatter Radar:\\
+Mathematical Model and Signal Processing Algorithms\\[6pt]
+\large Version 6 --- 2D Receive Arrays for Altitude Estimation}
+
+\author{D.~Huang}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document extends the v5.2 mathematical model by replacing each
+one-dimensional ($N$-element) receive array with a two-dimensional
+$N\times N$ planar array in the $x$--$z$ plane.  The 2D array
+provides both azimuth (direction cosine~$\ell_x$) and elevation
+(direction cosine~$\ell_z$) measurements of the target.  In
+\textbf{Zone~B}, the elevation DOA yields a direct, coarse estimate
+of the target altitude~$z_T$, removing the reliance on amplitude-based
+methods or the default $z_T{=}0$ initialisation.  In \textbf{Zone~A},
+the improved $z_T$ initial estimate accelerates convergence of the
+joint gradient-descent retrieval.  The 2D array also increases
+beamforming gain by a factor of~$N$ (from $N$ to $N^2$ elements),
+improving SNR in both zones.
+
+All other components --- 3D target model with oblique motion,
+pixel-dependent effective propagation distance, phase-compensated
+covariance for time-varying azimuth DOA, gradient descent with TV
+denoising, and joint parameter estimation --- are retained from v5.2.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{System Geometry}
+\label{sec:geometry}
+%======================================================================
+
+\subsection{Coordinate System}
+
+Cartesian system $(x,y,z)$: incident plane wave travels in~$+y$.
+A set of $K$ phased array receiver nodes is positioned along the
+$x$-axis at $y=R_0$.  Node~$k$ is centred at
+$(\bar{X}_k,\,R_0,\,0)$, $k=0,\ldots,K{-}1$.
+
+\subsection{2D Planar Array}
+\label{sec:2d_array}
+
+Each node has $N\times N$ elements arranged in a uniform rectangular
+array (URA) in the $x$--$z$ plane, with inter-element spacing
+$d=\lambda/2$ in both dimensions.  Element $(n_x,n_z)$ of node~$k$ is
+at
+\begin{equation}
+  \mathbf{p}_{k,n_x,n_z}
+  = \bigl(\bar{X}_k + n_x\,d,\;R_0,\;n_z\,d\bigr),
+  \quad n_x=0,\ldots,N{-}1,\quad n_z=0,\ldots,N{-}1.
+  \label{eq:element_pos}
+\end{equation}
+All distances are normalised to $\lambda$, so $\lambda=1$ and
+$d=\tfrac12$.  Each node has $N^2$ elements in total.
+
+\paragraph{Comparison with v5.2.}
+In v5.2, each node had $N$ elements along~$x$ only (a ULA), providing
+azimuth (direction cosine~$\ell_x$) but no elevation information.
+The 2D array adds $N$ rows in the $z$-direction, enabling
+measurement of the elevation direction cosine~$\ell_z$, which is
+directly related to the target altitude~$z_T$.
+
+\subsection{Node Placement}
+
+The $K$ nodes are uniformly spaced at half the Fresnel zone radius:
+\begin{equation}
+  \Delta X = \frac{\sqrt{R_0}}{2},
+  \qquad
+  \bar{X}_k = \Bigl(k - \frac{K{-}1}{2}\Bigr)\frac{\sqrt{R_0}}{2},
+  \quad k=0,\ldots,K{-}1.
+  \label{eq:node_positions}
+\end{equation}
+
+\subsection{Target Model --- Oblique Motion}
+\label{sec:target_model}
+
+(Unchanged from v5.2.)
+The target is a \textbf{three-dimensional rigid body}.  Its centre
+moves along a straight line in the $x$--$y$ plane at speed~$v$ and
+heading angle~$\theta$:
+\begin{equation}
+  \text{Target centre at time } t:\quad
+  \bigl(\,x_T(t),\;y_T(t),\;z_T\,\bigr),
+  \label{eq:target_pos}
+\end{equation}
+where
+\begin{align}
+  x_T(t) &= x_0 + v_x\,t, &\quad v_x &= v\cos\theta,
+  \label{eq:xT}\\
+  y_T(t) &= v_y\,t,        &\quad v_y &= v\sin\theta,
+  \label{eq:yT}
+\end{align}
+with $x_0$ the initial $x$-coordinate, $y_T(0)=0$, and $z_T$ a
+constant $z$-offset (the target altitude).
+
+\subsection{Time-Varying Propagation Distance}
+\label{sec:R_of_t}
+
+(Unchanged from v5.2.)
+\begin{equation}
+  R(t) = R_0 - v_y\,t = R_0 - v\sin\theta\;\!t.
+  \label{eq:R_of_t}
+\end{equation}
+
+%======================================================================
+\section{3D Target Shape and Shadow Projection}
+\label{sec:3d_shadow}
+%======================================================================
+
+(This entire section is unchanged from v5.2.)
+
+\subsection{Body-Frame Shape Function}
+
+\begin{equation}
+  T(x_b,y_b,z_b) =
+  \begin{cases}
+    1, & (x_b,y_b,z_b)\in\mathcal{V},\\
+    0, & \text{otherwise}.
+  \end{cases}
+  \label{eq:body_shape}
+\end{equation}
+
+\subsection{Body-Frame to World-Frame Transformation}
+
+\begin{align}
+  x_w &= x_T(t) + x_b\cos\theta - y_b\sin\theta,
+  \label{eq:xw}\\
+  y_w &= y_T(t) + x_b\sin\theta + y_b\cos\theta,
+  \label{eq:yw}\\
+  z_w &= z_T + z_b.
+  \label{eq:zw}
+\end{align}
+
+\subsection{Shadow Silhouette in the Aperture Plane}
+\label{sec:shadow_silhouette}
+
+The effective propagation distance from a body element at
+$(x_b,y_b)$ to the receiver plane:
+\begin{equation}
+  R_{\rm eff}(x_b,y_b) = R_0 - y_w
+  = R(t) - x_b\sin\theta - y_b\cos\theta.
+  \label{eq:R_eff_general}
+\end{equation}
+
+The shadow profile function in aperture-plane coordinates:
+\begin{equation}
+  F(x',z') =
+  \begin{cases}
+    1, & \exists\;y_b:\;T(x'/\!\cos\theta + y_b\sin\theta/\!\cos\theta,
+    \;y_b,\;z')=1,\\
+    0, & \text{otherwise}.
+  \end{cases}
+  \label{eq:shadow_profile}
+\end{equation}
+
+\subsection{Pixel-Dependent Effective Propagation Distance}
+\label{sec:pixel_R}
+
+For a thin target ($y_b\approx 0$):
+\begin{equation}
+  \boxed{R_{\rm eff}(x',t) = R(t) - x'\tan\theta.}
+  \label{eq:R_eff_pixel}
+\end{equation}
+
+%======================================================================
+\section{FSSR Model}
+\label{sec:fssr}
+%======================================================================
+
+(Unchanged from v5.2.  The FSSR is a property of the target--receiver
+geometry, not the array structure within a node.)
+
+\subsection{Continuous FSSR with Pixel-Dependent Propagation}
+
+\begin{equation}
+  \boxed{
+  \varepsilon_k(t) = \biggl|1
+  + \iint F(x',z')\;\frac{i}{R_{\rm eff}(x',t)}\;
+  \exp\!\biggl[\frac{i\pi}{R_{\rm eff}(x',t)}\Bigl(
+  \bigl(\Delta x_k(t)+x'\bigr)^2
+  + \bigl(z_T+z'\bigr)^2\Bigr)\biggr]
+  \frac{dx'\,dz'}{\cos\theta}\biggr|^2,}
+  \label{eq:fssr_continuous}
+\end{equation}
+where $\Delta x_k(t)=x_T(t)-\bar{X}_k$.
+
+\subsection{Pixel Discretisation}
+
+$N_{\rm pix}=M_z\times M_x$ square pixels of side~$2\delta$.
+Pixel~$(p,q)$ has centre $(X'_q,Z'_p)$ and value
+$P_{p,q}\in\{0,1\}$.  Effective propagation distance for column~$q$:
+\begin{equation}
+  R_{\mathrm{eff},q}(t) = R(t) - X'_q\tan\theta.
+  \label{eq:R_eff_q}
+\end{equation}
+
+\begin{equation}
+  \varepsilon_k(t) \approx \biggl|1
+  + \frac{1}{\cos\theta}\sum_{p,q}
+  \frac{i}{R_{\mathrm{eff},q}(t)}\;
+  F_q^{(k)}(t)\;G_{p,q}(t)\;P_{p,q}\biggr|^2.
+  \label{eq:fssr_pixel}
+\end{equation}
+
+\subsubsection{Fresnel Coefficients}
+
+$x$-direction:
+\begin{equation}
+  F_q^{(k)}(t)
+  = \sqrt{\frac{R_{\mathrm{eff},q}(t)}{4i}}\,\biggl[
+    \erfi\!\biggl(\sqrt{\frac{i\pi}{R_{\mathrm{eff},q}(t)}}
+    \bigl(X'_q{+}\delta{+}\Delta x_k(t)\bigr)\biggr)
+  - \erfi\!\biggl(\sqrt{\frac{i\pi}{R_{\mathrm{eff},q}(t)}}
+    \bigl(X'_q{-}\delta{+}\Delta x_k(t)\bigr)\biggr)\biggr].
+  \label{eq:Fq}
+\end{equation}
+
+$z$-direction (column-dependent):
+\begin{equation}
+  G_{p,q}(t)
+  = \sqrt{\frac{R_{\mathrm{eff},q}(t)}{4i}}\,\biggl[
+    \erfi\!\biggl(\sqrt{\frac{i\pi}{R_{\mathrm{eff},q}(t)}}
+    \bigl(Z'_p{+}\delta{+}z_T\bigr)\biggr)
+  - \erfi\!\biggl(\sqrt{\frac{i\pi}{R_{\mathrm{eff},q}(t)}}
+    \bigl(Z'_p{-}\delta{+}z_T\bigr)\biggr)\biggr].
+  \label{eq:Gpq}
+\end{equation}
+
+\subsection{Combined Fresnel Coefficient Matrix}
+
+\begin{equation}
+  H_{k,p,q}(t) = \frac{i}{\cos\theta\;R_{\mathrm{eff},q}(t)}\;
+  F_q^{(k)}(t)\;G_{p,q}(t),
+  \label{eq:H_matrix}
+\end{equation}
+\begin{align}
+  S_k(t) &= \sum_{p,q} H_{k,p,q}(t)\,P_{p,q},
+  \label{eq:Sk}\\
+  \varepsilon_k(t) &= |1 + S_k(t)|^2. \label{eq:eps_from_S}
+\end{align}
+
+%======================================================================
+\section{Unified Noise Model}
+\label{sec:noise}
+%======================================================================
+
+\subsection{Complex Signal Noise}
+At element $(n_x,n_z)$ of node~$k$:
+\begin{equation}
+  \eta_{k,n_x,n_z}(t) \sim \mathcal{CN}(0,\,\sigma^2),
+  \qquad
+  \sigma^2 = 10^{-\mathrm{SNR}_{\mathrm{dB}}/10},
+  \label{eq:noise_def}
+\end{equation}
+referenced to $|A_D|^2=1$.  The noise is i.i.d.\ across all $N^2$
+elements.
+
+\subsection{FSSR Measurement via Total Field}
+\label{sec:fssr_measurement}
+
+The direct-path amplitude $A_D=1$ is perfectly known.  After
+\textbf{2D beamforming} toward broadside at node~$k$ (steering both
+$x$ and $z$ dimensions to $(u_x,u_z)=(0,0)$):
+\begin{equation}
+  \tilde{y}_k(t) = \frac{1}{N^2}\sum_{n_x=0}^{N-1}
+  \sum_{n_z=0}^{N-1} x_{k,n_x,n_z}(t)
+  \approx 1 + S_k(t) + \tilde{\eta}_k(t),
+  \label{eq:beamformed}
+\end{equation}
+where the beamformed noise is
+\begin{equation}
+  \tilde{\eta}_k(t) \sim \mathcal{CN}(0,\,\sigma^2/N^2).
+  \label{eq:beamformed_noise}
+\end{equation}
+
+\paragraph{SNR improvement.}
+Compared with v5.2 (where $\tilde{\eta}\sim\mathcal{CN}(0,\sigma^2/N)$),
+the 2D array reduces the beamformed noise power by a factor of~$N$,
+providing an additional $10\log_{10}N$\,dB of processing gain.
+
+The FSSR is measured as
+\begin{equation}
+  \boxed{b_k(t) = |\tilde{y}_k(t)|^2
+  = |1 + S_k(t) + \tilde{\eta}_k(t)|^2.}
+  \label{eq:fssr_measured}
+\end{equation}
+Expanding:
+\begin{equation}
+  b_k(t) = \underbrace{|1{+}S_k|^2}_{\varepsilon_k}
+  + \underbrace{2\,\mathrm{Re}\!\bigl[(1{+}S_k)\,
+  \tilde{\eta}_k^*\bigr]}_{\text{signal-dependent}}
+  + \underbrace{|\tilde{\eta}_k|^2}_{\text{quadratic}}.
+  \label{eq:fssr_expanded}
+\end{equation}
+
+%======================================================================
+\section{Zone Classification}
+\label{sec:zones}
+%======================================================================
+
+(Unchanged from v5.2.)
+
+\subsection{Per-Node Fresnel Parameter}
+\begin{equation}
+  \xi_k(t) = \frac{|\Delta x_k(t)|}{\sqrt{R(t)}}.
+  \label{eq:xi_k}
+\end{equation}
+\begin{equation}
+  \text{Zone~B: } \xi_k(t)>\xi_{\mathrm{th}},
+  \qquad
+  \text{Zone~A: } \xi_k(t)\le\xi_{\mathrm{th}}.
+  \label{eq:zone_def}
+\end{equation}
+
+\subsection{Sequential Zone Entry}
+Node~$k$ enters Zone~A around time
+$t_k^*\approx(\bar{X}_k-x_0)/v_x$.
+
+%======================================================================
+\section{Zone~B: Parameter Estimation with 2D Arrays}
+\label{sec:zone_b}
+%======================================================================
+
+When $\xi_k\gg 1$, the target appears as a point source.  The 2D
+array enables estimation of \emph{both} the azimuth direction
+cosine~$\ell_x$ and the elevation direction cosine~$\ell_z$,
+allowing direct estimation of $z_T$ from Zone~B data.
+
+The unknowns are $v_x,v_y,x_0,R_0,z_T$
+(or equivalently $v,\theta,x_0,R_0,z_T$).
+
+\subsection{Received Signal Model}
+\label{sec:zone_b_signal}
+
+At element $(n_x,n_z)$ of node~$k$:
+\begin{equation}
+  \boxed{
+  x_{k,n_x,n_z}(t) = A_D + G_T(t)\,e^{j\psi_k(t)}\,
+  e^{j\pi n_x\,\ell_x^{(k)}(t)}\,
+  e^{j\pi n_z\,\ell_z^{(k)}(t)}
+  + \eta_{k,n_x,n_z}(t),}
+  \label{eq:rx_signal}
+\end{equation}
+where:
+\begin{itemize}
+  \item $A_D=1$;
+  \item $G_T(t) = 2\sqrt{\pi}\,A_\Sigma / R(t)$: scattered
+    amplitude;
+  \item $\psi_k(t) = \pi[\Delta x_k(t)^2{+}z_T^2]/R(t)$:
+    propagation phase;
+  \item $\ell_x^{(k)}(t) = \Delta x_k(t)/D_k(t)$: $x$-direction
+    cosine;
+  \item $\ell_z^{(k)}(t) = z_T/D_k(t)$: $z$-direction cosine
+    (\textbf{new});
+  \item $D_k(t) = \sqrt{\Delta x_k(t)^2+R(t)^2+z_T^2}$: range;
+  \item $\eta_{k,n_x,n_z}\sim\mathcal{CN}(0,\sigma^2)$.
+\end{itemize}
+
+\paragraph{Key difference from v5.2.}
+The phase progression across the $z$-dimension of the array,
+$\exp(j\pi n_z\,\ell_z^{(k)})$, is the new term that enables
+elevation DOA estimation.  This phase is proportional to $z_T/D_k$
+and varies slowly with time (since $z_T$ is constant and $D_k$
+changes slowly in Zone~B).
+
+\subsection{2D Steering Vector}
+\label{sec:2d_steering}
+
+Define the 2D steering vector for direction cosines $(\ell_x,\ell_z)$:
+\begin{equation}
+  \mathbf{a}(\ell_x,\ell_z) = \mathbf{a}_x(\ell_x)\otimes
+  \mathbf{a}_z(\ell_z) \;\in\;\C^{N^2},
+  \label{eq:steering_2d}
+\end{equation}
+where $\otimes$ denotes the Kronecker product, and
+\begin{align}
+  \mathbf{a}_x(u) &= [1,\,e^{j\pi u},\,\ldots,\,
+  e^{j\pi(N-1)u}]^T \;\in\;\C^N,
+  \label{eq:ax}\\
+  \mathbf{a}_z(w) &= [1,\,e^{j\pi w},\,\ldots,\,
+  e^{j\pi(N-1)w}]^T \;\in\;\C^N.
+  \label{eq:az}
+\end{align}
+
+The $N^2\times 1$ received signal vector at node~$k$, formed by
+stacking columns (i.e.\ vectorising over $(n_x,n_z)$):
+\begin{equation}
+  \mathbf{x}_k(t) = A_D\,\mathbf{1}_{N^2}
+  + G_T(t)\,e^{j\psi_k(t)}\,
+  \mathbf{a}\bigl(\ell_x^{(k)}(t),\,\ell_z^{(k)}(t)\bigr)
+  + \bm{\eta}_k(t).
+  \label{eq:rx_vector}
+\end{equation}
+
+\subsection{The Time-Varying DOA Problem}
+\label{sec:tv_doa}
+
+The azimuth DOA $\ell_x^{(k)}(t)$ varies significantly with time
+(same as v5.2).  The elevation DOA $\ell_z^{(k)}(t)=z_T/D_k(t)$
+varies much more slowly because $z_T$ is constant and $D_k$ changes
+slowly in Zone~B ($D_k\gg\Delta x_k$).
+
+\subsubsection{Azimuth DOA Variation (Review from v5.2)}
+
+The standard spatial covariance
+$\hat{\mathbf{R}}_k=(1/M)\sum_m\mathbf{x}_k(t_m)\mathbf{x}_k^H(t_m)$
+suffers from DOA smearing in the $x$-dimension due to the
+time-varying $\ell_x$.  The maximum number of uncompensated snapshots:
+\begin{equation}
+  M_{\max}^{\mathrm{(unc)}} \approx
+  \frac{2}{(N{-}1)\,|\beta_x|\,\Delta t},
+  \label{eq:Mmax_uncomp}
+\end{equation}
+where $\beta_x$ is the azimuth DOA rate.
+
+\subsubsection{Elevation DOA Variation}
+
+The elevation DOA rate is
+\begin{equation}
+  \dot{\ell}_z^{(k)}(t) = -\frac{z_T}{D_k^2}\,\dot{D}_k(t),
+  \label{eq:lz_rate}
+\end{equation}
+where $\dot{D}_k = (v_x\Delta x_k + v_y R)/D_k$ is the range rate.
+Since $z_T/D_k\ll 1$ and $\dot{D}_k/D_k$ is small in Zone~B, the
+elevation DOA variation is typically much smaller than the azimuth
+variation:
+\begin{equation}
+  |\dot{\ell}_z| \ll |\dot{\ell}_x|.
+  \label{eq:lz_slow}
+\end{equation}
+This means the $z$-dimension of the covariance matrix is minimally
+affected by DOA smearing, even for moderately large~$M$.
+
+\subsubsection{Phase-Compensated 2D Spatial Covariance}
+\label{sec:phase_comp}
+
+Given an estimate $\hat{\beta}_x$ of the azimuth DOA rate, define
+compensated snapshots by dechirping only the $x$-dimension phase:
+\begin{equation}
+  \boxed{
+  \tilde{x}_{k,n_x,n_z}(t_m) = x_{k,n_x,n_z}(t_m)\;
+  e^{-j\pi\,n_x\;\!\hat{\beta}_x\,(t_m - t_{\mathrm{ref}})}.}
+  \label{eq:phase_comp}
+\end{equation}
+
+Note: no compensation is needed in the $z$-dimension since
+$\ell_z$ varies negligibly.
+
+The compensated $N^2\times N^2$ spatial covariance:
+\begin{equation}
+  \tilde{\mathbf{R}}_k
+  = \frac{1}{M}\sum_{m=1}^{M}
+  \tilde{\mathbf{x}}_k(t_m)\,\tilde{\mathbf{x}}_k^H(t_m).
+  \label{eq:cov_compensated}
+\end{equation}
+
+If $\hat{\beta}_x=\beta_x$, the azimuth DOA is frozen at
+$\ell_x(t_{\mathrm{ref}})$ for all snapshots.
+
+\subsubsection{Optimal~$M$ (unchanged from v5.2 except array size)}
+\label{sec:optimal_M}
+
+The azimuth-dimension constraint on~$M$ remains:
+
+\paragraph{(a) Rate estimation error $\Delta\beta_x$:}
+$|\Delta\beta_x|\,M\,\Delta t \le c_1/N$
+$\;\Longrightarrow\;M \le c_1/(N|\Delta\beta_x|\Delta t)$.
+
+\paragraph{(b) Quadratic azimuth DOA variation~$\gamma_x$:}
+\begin{equation}
+  \gamma_x^{(k)} \approx \frac{v_x\,v_y}{R_0^2}
+  + \frac{v_y^2\,(x_0{-}\bar{X}_k)}{R_0^3}.
+  \label{eq:gamma_x}
+\end{equation}
+$|\gamma_x|(M\Delta t)^2/4 \le c_2/N$
+$\;\Longrightarrow\;M \le 2\sqrt{c_2/N}\,/\,(|\gamma_x|^{1/2}\Delta t)$.
+
+\paragraph{Combined optimal~$M$:}
+\begin{equation}
+  \boxed{
+  M_{\mathrm{opt}} = \min\!\left(
+    \frac{c_1}{N\,|\Delta\beta_x|\,\Delta t},\;
+    \frac{2}{\sqrt{N\,|\gamma_x|}\;\!\Delta t},\;
+    M_{\mathrm{avail}}\right).}
+  \label{eq:M_opt}
+\end{equation}
+
+\paragraph{Iterative refinement:}
+\begin{enumerate}
+  \item \textbf{Pass~1} (no compensation): $M\le M_{\max}^{(\mathrm{unc})}$;
+    rough~$\hat{\beta}_x$.
+  \item \textbf{Pass~2+}: compensate with~$\hat{\beta}_x$, enlarge $M$
+    to~$M_{\mathrm{opt}}$, re-estimate DOA.
+\end{enumerate}
+
+\subsection{2D DOA Estimation}
+\label{sec:2d_doa}
+
+The Kronecker structure of the 2D steering
+vector~\eqref{eq:steering_2d} allows efficient separable or joint
+DOA estimation.
+
+\subsubsection{Method 1: Joint 2D MUSIC}
+\label{sec:2d_music}
+
+Apply eigendecomposition to
+$\tilde{\mathbf{R}}_k\in\C^{N^2\times N^2}$; partition into signal
+and noise subspaces $\mathbf{E}_s$, $\mathbf{E}_n$.  The 2D MUSIC
+pseudo-spectrum:
+\begin{equation}
+  P_{\mathrm{MUSIC}}^{(2D)}(\ell_x,\ell_z)
+  = \frac{1}{\mathbf{a}^H(\ell_x,\ell_z)\,
+  \mathbf{E}_n\mathbf{E}_n^H\,\mathbf{a}(\ell_x,\ell_z)}.
+  \label{eq:music_2d}
+\end{equation}
+The peak location gives $(\hat{\ell}_x,\hat{\ell}_z)$.
+
+\paragraph{Computational cost.}
+The eigendecomposition of $\tilde{\mathbf{R}}_k\in\C^{N^2\times N^2}$
+has cost $O(N^6)$.  For moderate $N$ ($\le 16$), this is tractable.
+For larger $N$, use the separable methods below.
+
+\subsubsection{Method 2: Separable Estimation via Row and Column
+Covariances}
+\label{sec:separable_doa}
+
+Exploit the Kronecker structure
+$\mathbf{R}_{\mathrm{sig}}=\sigma_s^2\,
+\mathbf{a}_x\mathbf{a}_x^H\otimes\mathbf{a}_z\mathbf{a}_z^H$.
+
+\paragraph{Step 1: Azimuth DOA.}
+Form the \textbf{row-averaged covariance} by summing the $N\times N$
+diagonal blocks of $\tilde{\mathbf{R}}_k$:
+\begin{equation}
+  \mathbf{R}_x = \frac{1}{N}\sum_{m=0}^{N-1}
+  [\tilde{\mathbf{R}}_k]_{mN:(m+1)N,\;mN:(m+1)N}
+  \;\in\;\C^{N\times N}.
+  \label{eq:Rx}
+\end{equation}
+Apply MUSIC or LS-ESPRIT to $\mathbf{R}_x$ to estimate $\hat{\ell}_x$.
+
+\paragraph{Step 2: Elevation DOA.}
+Form the \textbf{column-averaged covariance} by extracting the
+$N\times N$ blocks at positions $(m_1,m_2)$ along the
+$x$-dimension and summing:
+\begin{equation}
+  [\mathbf{R}_z]_{n_{z_1},n_{z_2}}
+  = \frac{1}{N}\sum_{m=0}^{N-1}
+  [\tilde{\mathbf{R}}_k]_{mN+n_{z_1},\;mN+n_{z_2}}
+  \;\in\;\C^{N\times N}.
+  \label{eq:Rz}
+\end{equation}
+Apply MUSIC or LS-ESPRIT to $\mathbf{R}_z$ to estimate $\hat{\ell}_z$.
+
+\paragraph{Advantage.}
+Each step requires only an $N\times N$ eigendecomposition ($O(N^3)$),
+reducing cost from $O(N^6)$ to $O(N^3)$.  The averaging also improves
+the effective number of snapshots for each dimension.
+
+\subsubsection{Method 3: 2D LS-ESPRIT}
+\label{sec:2d_esprit}
+
+Define shift-invariance structures for both dimensions:
+
+\paragraph{Azimuth ($x$-dimension):}
+Subarrays formed by selecting rows $0,\ldots,N{-}2$ vs.\
+$1,\ldots,N{-}1$ of the $x$-dimension.  For the Kronecker-structured
+signal subspace $\mathbf{E}_s$:
+\begin{equation}
+  \mathbf{E}_{x,1} = \mathbf{J}_{x,1}\,\mathbf{E}_s, \qquad
+  \mathbf{E}_{x,2} = \mathbf{J}_{x,2}\,\mathbf{E}_s,
+  \label{eq:esprit_x}
+\end{equation}
+where $\mathbf{J}_{x,1}=\mathbf{I}_{N-1,N}^{(\mathrm{top})}
+\otimes\mathbf{I}_N$ and
+$\mathbf{J}_{x,2}=\mathbf{I}_{N-1,N}^{(\mathrm{bot})}
+\otimes\mathbf{I}_N$ are the selection matrices.  Then
+$\hat{\ell}_x=\angle\lambda_x/\pi$ from the eigenvalue of
+$\mathbf{E}_{x,1}^\dagger\mathbf{E}_{x,2}$.
+
+\paragraph{Elevation ($z$-dimension):}
+Subarrays by selecting columns $0,\ldots,N{-}2$ vs.\
+$1,\ldots,N{-}1$ of the $z$-dimension:
+\begin{equation}
+  \mathbf{E}_{z,1} = \mathbf{J}_{z,1}\,\mathbf{E}_s, \qquad
+  \mathbf{E}_{z,2} = \mathbf{J}_{z,2}\,\mathbf{E}_s,
+  \label{eq:esprit_z}
+\end{equation}
+where $\mathbf{J}_{z,1}=\mathbf{I}_N\otimes
+\mathbf{I}_{N-1,N}^{(\mathrm{top})}$ and
+$\mathbf{J}_{z,2}=\mathbf{I}_N\otimes
+\mathbf{I}_{N-1,N}^{(\mathrm{bot})}$.  Then
+$\hat{\ell}_z=\angle\lambda_z/\pi$.
+
+\subsection{Altitude Estimation from Elevation DOA}
+\label{sec:zT_from_doa}
+
+Given $\hat{\ell}_z^{(k)}(t)$ from the 2D array at node~$k$:
+
+\subsubsection{Far-Field Approximation}
+
+For $D_k\approx R(t)$:
+\begin{equation}
+  \ell_z^{(k)}(t) \approx \frac{z_T}{R(t)}.
+  \label{eq:lz_farfield}
+\end{equation}
+This is \textbf{independent of $k$} in the far-field limit (since
+$z_T$ and $R(t)$ are the same for all nodes).
+
+Estimate:
+\begin{equation}
+  \boxed{\hat{z}_T = \hat{\ell}_z\;\hat{R}(t),}
+  \label{eq:zT_from_lz}
+\end{equation}
+where $\hat{R}(t)$ is estimated from the azimuth DOA and Doppler
+analysis (Section~\ref{sec:joint_zone_b}).
+
+\subsubsection{Exact Inversion}
+
+Using $D_k=\sqrt{\Delta x_k^2+R(t)^2+z_T^2}$:
+\begin{equation}
+  z_T = \frac{\hat{\ell}_z\sqrt{\Delta x_k^2+R^2}}
+  {\sqrt{1-\hat{\ell}_z^2}}.
+  \label{eq:zT_exact}
+\end{equation}
+
+\subsubsection{Time-Averaged $z_T$ Estimate}
+
+Since $z_T$ is constant, average over $L$ time steps and $K$ nodes:
+\begin{equation}
+  \hat{z}_T^{(\mathrm{B})} = \frac{1}{KL}\sum_{k=0}^{K-1}
+  \sum_{\ell=1}^{L}
+  \frac{\hat{\ell}_z^{(k)}(t_\ell)\,\hat{R}(t_\ell)}
+  {\sqrt{1-[\hat{\ell}_z^{(k)}(t_\ell)]^2}}\;\!
+  \sqrt{1+\bigl[\hat{\ell}_x^{(k)}(t_\ell)\bigr]^2
+  /\bigl(1-[\hat{\ell}_x^{(k)}(t_\ell)]^2\bigr)}.
+  \label{eq:zT_averaged}
+\end{equation}
+In the far-field limit, this simplifies to
+$\hat{z}_T^{(\mathrm{B})}\approx(1/KL)\sum_{k,\ell}
+\hat{\ell}_z^{(k)}(t_\ell)\,\hat{R}(t_\ell)$.
+
+\subsubsection{Achievable Precision}
+
+The Cram\'er--Rao bound for the elevation direction cosine from an
+$N$-element ULA with SNR per element~$\rho$ and $M$ snapshots is:
+\begin{equation}
+  \mathrm{var}(\hat{\ell}_z)
+  \ge \frac{6}{\pi^2\,\rho\,M\,N(N^2{-}1)}.
+  \label{eq:crb_lz}
+\end{equation}
+The corresponding altitude precision (far-field):
+\begin{equation}
+  \mathrm{std}(\hat{z}_T) \approx R
+  \sqrt{\frac{6}{\pi^2\,\rho\,M\,N(N^2{-}1)}}.
+  \label{eq:std_zT}
+\end{equation}
+For $N=16$, $\rho=100$ (20\,dB), $M=100$, $R=10^4$:
+$\mathrm{std}(\hat{z}_T)\approx 1.7\lambda$, sufficient for a
+coarse altitude estimate that can be refined in Zone~A.
+
+\subsection{Azimuth DOA Time Series and Nonlinear Model}
+\label{sec:doa_nonlinear}
+
+(Unchanged from v5.2.)
+In the far field:
+\begin{equation}
+  \ell_x^{(k)}(t) \approx \frac{x_0+v_x t-\bar{X}_k}{R_0-v_y t}.
+  \label{eq:doa_ratio}
+\end{equation}
+Taylor expansion:
+\begin{align}
+  \ell_x^{(k)}(t) &\approx \alpha_k + \beta_k\,t + \gamma_k\,t^2
+  + \cdots, \label{eq:doa_taylor}
+\end{align}
+\begin{align}
+  \alpha_k &= \frac{x_0{-}\bar{X}_k}{R_0},
+  \label{eq:alpha_k}\\
+  \beta_k &= \frac{v_x}{R_0}
+  + \frac{v_y(x_0{-}\bar{X}_k)}{R_0^2},
+  \label{eq:beta_k}\\
+  \gamma_k &= \frac{v_x v_y}{R_0^2}
+  + \frac{v_y^2(x_0{-}\bar{X}_k)}{R_0^3}.
+  \label{eq:gamma_k}
+\end{align}
+
+Node-dependent DOA rate:
+\begin{equation}
+  \beta_k = \underbrace{\frac{v_x}{R_0}
+  + \frac{v_y\,x_0}{R_0^2}}_a
+  - \underbrace{\frac{v_y}{R_0^2}}_b\;\bar{X}_k
+  \;\triangleq\; a - b\,\bar{X}_k.
+  \label{eq:beta_linear_in_Xk}
+\end{equation}
+
+\subsection{Elevation DOA Time Series}
+\label{sec:elev_doa_timeseries}
+
+The elevation direction cosine in the far field:
+\begin{equation}
+  \ell_z^{(k)}(t) \approx \frac{z_T}{R(t)}
+  = \frac{z_T}{R_0 - v_y\,t}.
+  \label{eq:lz_time}
+\end{equation}
+For $|v_y t|\ll R_0$:
+\begin{equation}
+  \ell_z^{(k)}(t) \approx \frac{z_T}{R_0}
+  + \frac{z_T\,v_y}{R_0^2}\,t + \cdots
+  \;\triangleq\; \alpha_z + \beta_z\,t,
+  \label{eq:lz_taylor}
+\end{equation}
+with
+\begin{equation}
+  \alpha_z = \frac{z_T}{R_0},\qquad
+  \beta_z = \frac{z_T\,v_y}{R_0^2}.
+  \label{eq:lz_coeffs}
+\end{equation}
+
+\paragraph{Key observations:}
+\begin{enumerate}
+  \item $\alpha_z$ directly gives $z_T/R_0$; combined with
+    $\hat{R}_0$ from azimuth analysis, this yields $\hat{z}_T$.
+  \item $\beta_z$ is small when $v_y$ is small (near-perpendicular
+    crossing) or when $z_T$ is small.  In either case, $\ell_z$
+    varies slowly, confirming that $z$-dimension phase compensation
+    is unnecessary.
+  \item For $\theta=0$: $\beta_z=0$ and $\ell_z$ is strictly
+    constant.
+\end{enumerate}
+
+\subsection{Doppler Analysis}
+\label{sec:doppler}
+
+(Unchanged from v5.2.)
+The propagation phase:
+$\psi_k(t)=\pi[\Delta x_k(t)^2+z_T^2]/R(t)$.  Instantaneous
+Doppler:
+\begin{equation}
+  f_D^{(k)}(t) = \frac{1}{2\pi}\frac{d\psi_k}{dt}
+  = \frac{v_x\,\Delta x_k(t)}{R(t)}
+  + \frac{v_y[\Delta x_k(t)^2+z_T^2]}{2\,R(t)^2}.
+  \label{eq:doppler_full}
+\end{equation}
+
+The Doppler is estimated via STFT on the 2D-steered beam.  With
+estimated direction cosines $(\hat{\ell}_x,\hat{\ell}_z)$:
+\begin{equation}
+  y_k(t) = \frac{1}{N^2}\sum_{n_x,n_z}
+  x_{k,n_x,n_z}(t)\;e^{-j\pi(n_x\hat{\ell}_x+n_z\hat{\ell}_z)}.
+  \label{eq:steered_beam}
+\end{equation}
+
+\paragraph{Note.}
+In v5.2, the steered beam was
+$(1/N)\sum_{n_x}x_{k,n_x}e^{-j\pi n_x\hat{\ell}_x}$ (1D steering).
+The 2D steering~\eqref{eq:steered_beam} provides an additional
+$10\log_{10}N$\,dB of gain by also coherently combining the
+$z$-dimension elements toward the target.
+
+\subsection{Joint Parameter Estimation}
+\label{sec:joint_zone_b}
+
+\subsubsection{Step 1: $v_y/R_0^2$ from azimuth DOA-rate variation}
+(Unchanged.)
+From~\eqref{eq:beta_linear_in_Xk}:
+$\hat{b}=-v_y/R_0^2$, $\hat{a}=v_x/R_0+v_y x_0/R_0^2$.
+
+\subsubsection{Step 2: Combining with Doppler}
+(Unchanged.)
+For $\theta\approx 0$:
+$|v_x|=|\hat{\dot{f}}|/|\hat{\beta}|$,\;
+$R_0=|v_x|/|\hat{\beta}|$.
+
+For $\theta\ne 0$: nonlinear least-squares fit.  Initialisation:
+\begin{equation}
+  \hat{R}_0 \approx
+  \frac{|\hat{\dot{f}}_{\mathrm{avg}}|}
+  {\hat{\beta}_{\mathrm{avg}}^2},\qquad
+  \hat{v}_y = -\hat{b}\,\hat{R}_0^2,\qquad
+  \hat{v}_x = (\hat{a}-\hat{b}\,\hat{x}_0)\hat{R}_0,\qquad
+  \hat{x}_0 = \hat{\alpha}_{\mathrm{avg}}\hat{R}_0
+  +\bar{X}_{\mathrm{avg}}.
+  \label{eq:joint_init}
+\end{equation}
+
+\subsubsection{Step 3: $z_T$ from elevation DOA (\textbf{new in v6})}
+
+Using the elevation DOA estimates from
+Section~\ref{sec:zT_from_doa}:
+\begin{equation}
+  \boxed{
+  \hat{z}_T^{(\mathrm{B})} = \hat{\alpha}_z\;\hat{R}_0
+  = \frac{1}{KL}\sum_{k,\ell}\hat{\ell}_z^{(k)}(t_\ell)\;\hat{R}_0.}
+  \label{eq:zT_zone_b}
+\end{equation}
+
+\paragraph{Cross-check via elevation DOA rate.}
+If $v_y\ne 0$, the elevation DOA rate provides a consistency check:
+\begin{equation}
+  \hat{z}_T = \frac{\hat{\beta}_z\,\hat{R}_0^2}{\hat{v}_y}.
+  \label{eq:zT_crosscheck}
+\end{equation}
+
+%======================================================================
+\section{Zone~A: Gradient Descent with TV Denoising}
+\label{sec:zone_a}
+%======================================================================
+
+(The Zone~A formulation is unchanged from v5.2.  The only difference
+is that the initial $z_T$ estimate is now $\hat{z}_T^{(\mathrm{B})}$
+from the elevation DOA, rather than $z_T=0$.)
+
+\subsection{Problem Formulation}
+
+\begin{equation}
+  \hat{\mathbf{P}} = \argmin_{\mathbf{P}}
+  \bigl\{\mathcal{F}(\mathbf{P}) + \tau\,\mathcal{R}(\mathbf{P})\bigr\},
+  \label{eq:zone_a_problem}
+\end{equation}
+\begin{equation}
+  \mathcal{F}(\mathbf{P})
+  = \sum_{k,\ell}
+  \bigl[b_{k,\ell} - \varepsilon_k(t_\ell;\mathbf{P})\bigr]^2,
+  \label{eq:fidelity}
+\end{equation}
+\begin{equation}
+  \mathcal{R}(\mathbf{P}) = \TV(\mathbf{P})
+  = \sum_{p,q}\sqrt{(P_{p,q}{-}P_{p+1,q})^2
+  +(P_{p,q}{-}P_{p,q+1})^2}.
+  \label{eq:tv_reg}
+\end{equation}
+
+\subsection{Gradient of the Fidelity Function}
+\label{sec:gradient}
+
+Using the combined coefficient~\eqref{eq:H_matrix}:
+\begin{equation}
+  \boxed{
+  \frac{\partial\mathcal{F}_{k,\ell}}{\partial P_{p,q}}
+  = 4[\varepsilon_k{-}b_{k,\ell}]\,
+  \mathrm{Re}\!\bigl[H_{k,p,q}(t_\ell)\,
+  \overline{(1{+}S_{k,\ell})}\bigr].}
+  \label{eq:grad_fidelity}
+\end{equation}
+
+\subsection{Algorithm 1: Shadow Profile Retrieval}
+\label{sec:alg1}
+
+\begin{algorithm}[H]
+\caption{Gradient descent with TV denoising for shadow profile
+retrieval}
+\label{alg:profile_retrieval}
+\begin{algorithmic}[1]
+\Require FSSR measurements $\{b_{k,\ell}\}$; coefficient matrices
+$\{\mathbf{H}_k(t_\ell)\}$; step size $\gamma>0$;
+TV parameter $\tau>0$; denoising iterations~$N_D$
+\State Initialise: $\hat{\mathbf{P}}_0\leftarrow\mathbf{0}$,
+$\mathbf{s}_0\leftarrow\hat{\mathbf{P}}_0$, $q_0\leftarrow 1$
+\For{$t=1,\ldots,N_S$}
+  \State $\gamma_t \leftarrow \gamma/\sqrt{t}$
+  \State $\mathbf{z}_t \leftarrow \mathbf{s}_{t-1}
+    - \frac{\gamma_t}{L_{\mathrm{tot}}}
+    \sum_{k,\ell}\nabla_{\mathbf{P}}\mathcal{F}_{k,\ell}
+    (\mathbf{s}_{t-1})$
+  \Comment{$L_{\mathrm{tot}}=\sum_k L_k$}
+  \State $\hat{\mathbf{P}}_t \leftarrow
+    \mathrm{prox}_{\mathcal{R}}(\mathbf{z}_t,\gamma_t\tau)$
+  \Comment{Algorithm~\ref{alg:tv_denoise}}
+  \State $q_t \leftarrow (1{+}\sqrt{1{+}4q_{t-1}^2})/2$
+  \State $\mathbf{s}_t \leftarrow \hat{\mathbf{P}}_t
+    + \frac{q_{t-1}-1}{q_t}
+    (\hat{\mathbf{P}}_t{-}\hat{\mathbf{P}}_{t-1})$
+\EndFor
+\State \Return $\hat{\mathbf{P}}_{N_S}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Algorithm 2: TV Denoising Proximal Operator}
+\label{sec:alg2}
+
+\begin{equation}
+  \mathrm{prox}_{\mathcal{R}}(\mathbf{z},\delta)
+  = \argmin_{\mathbf{P}}\Bigl\{
+  \tfrac{1}{2\delta}\|\mathbf{P}{-}\mathbf{z}\|^2
+  + \TV(\mathbf{P})\Bigr\}
+  \quad\text{s.t.}\quad 0\le P_{p,q}\le 1.
+  \label{eq:prox_problem}
+\end{equation}
+
+\paragraph{Operators.}
+\begin{itemize}
+  \item \textbf{Discrete gradient}
+    $\mathcal{L}^T$:
+    $p_{i,j}=m_{i,j}{-}m_{i+1,j}$,\;
+    $q_{i,j}=m_{i,j}{-}m_{i,j+1}$.
+  \item \textbf{Discrete divergence}
+    $\mathcal{L}$:
+    $[\mathcal{L}(\mathbf{p},\mathbf{q})]_{i,j}
+    = p_{i,j}{+}q_{i,j}{-}p_{i-1,j}{-}q_{i,j-1}$.
+  \item \textbf{Clipping}
+    $\mathcal{H}_C$:
+    $[\mathcal{H}_C(\mathbf{m})]_{i,j}=\min(1,\max(0,m_{i,j}))$.
+  \item \textbf{Ball projection}
+    $\mathcal{H}_B$:
+    $r_{i,j}=p_{i,j}/\max(1,\sqrt{p_{i,j}^2{+}q_{i,j}^2})$,\;
+    $s_{i,j}=q_{i,j}/\max(1,\sqrt{p_{i,j}^2{+}q_{i,j}^2})$.
+\end{itemize}
+
+\begin{algorithm}[H]
+\caption{TV denoising:
+$\mathrm{prox}_{\mathcal{R}}(\mathbf{z},\delta)$}
+\label{alg:tv_denoise}
+\begin{algorithmic}[1]
+\Require Pixel image $\mathbf{z}\in\R^{M_z\times M_x}$,
+regularisation $\delta$
+\State $(\mathbf{p}_0,\mathbf{q}_0)\leftarrow(\mathbf{0},\mathbf{0})$;
+$(\mathbf{r}_1,\mathbf{s}_1)\leftarrow(\mathbf{0},\mathbf{0})$;
+$w_1\leftarrow 1$
+\For{$t=1,\ldots,N_D$}
+  \State $(\mathbf{p}_t,\mathbf{q}_t) \leftarrow
+    \mathcal{H}_B\!\bigl[(\mathbf{r}_t,\mathbf{s}_t)
+    + \tfrac{1}{8\delta}\,\mathcal{L}^T\!\bigl(
+    \mathcal{H}_C[\mathbf{z}{-}\delta\,
+    \mathcal{L}(\mathbf{r}_t,\mathbf{s}_t)]\bigr)\bigr]$
+  \State $w_{t+1}\leftarrow(1{+}\sqrt{1{+}4w_t^2})/2$
+  \State $(\mathbf{r}_{t+1},\mathbf{s}_{t+1})\leftarrow
+    (\mathbf{p}_t,\mathbf{q}_t)
+    +\tfrac{w_t-1}{w_{t+1}}
+    [(\mathbf{p}_t{-}\mathbf{p}_{t-1},\,
+    \mathbf{q}_t{-}\mathbf{q}_{t-1})]$
+\EndFor
+\State $\hat{\mathbf{x}}\leftarrow
+  \mathcal{H}_C[\mathbf{z}{-}\delta\,
+  \mathcal{L}(\mathbf{r}_{N_D},\mathbf{s}_{N_D})]$
+\State \Return $\hat{\mathbf{x}}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Algorithm 3: Joint Motion Parameter and Profile Estimation}
+\label{sec:alg3}
+
+The outer loop optimises $\bm{\theta}=(v_x,v_y,z_T,R_0)$ around the
+profile retrieval, \textbf{initialised with the Zone~B estimates
+including $\hat{z}_T^{(\mathrm{B})}$} from the elevation DOA.
+
+The cost function:
+\begin{equation}
+  C(\hat{\mathbf{P}},\bm{\theta})
+  = \sum_{k,\ell}\bigl[b_{k,\ell}
+  - \varepsilon_k(t_\ell;\hat{\mathbf{P}},\bm{\theta})\bigr]^2.
+  \label{eq:cost_joint}
+\end{equation}
+
+\begin{algorithm}[H]
+\caption{Joint shadow profile and motion parameter estimation}
+\label{alg:joint_estimation}
+\begin{algorithmic}[1]
+\Require FSSR measurements $\{b_{k,\ell}\}$; initial estimates
+$\hat{v}_x^{(0)},\hat{v}_y^{(0)},
+\hat{z}_T^{(0)}=\hat{z}_T^{(\mathrm{B})},\hat{R}_0^{(0)},
+\hat{x}_0$ (fixed)
+\State $q_0\leftarrow 1$;
+$\bm{\theta}^{(0)}\leftarrow
+(\hat{v}_x^{(0)},\hat{v}_y^{(0)},\hat{z}_T^{(0)},\hat{R}_0^{(0)})$
+\For{$n=1,\ldots,N_V$}
+  \State Compute trajectories and
+    $R_{\mathrm{eff},q}(t_\ell)=R(t_\ell)-X'_q\tan\theta^{(n-1)}$
+    \Comment{$\theta=\arctan(v_y/v_x)$}
+  \State Build coefficient matrices
+    $\mathbf{H}_k(t_\ell)$ using~\eqref{eq:H_matrix}
+  \State $\hat{\mathbf{P}}_n \leftarrow
+    \text{Algorithm~\ref{alg:profile_retrieval}}
+    (\{b_{k,\ell}\},\bm{\theta}^{(n-1)})$
+  \State Compute $C$ and numerical gradients
+    $\partial C/\partial\theta_i\approx
+    [C(\bm{\theta}{+}\Delta\theta_i\mathbf{e}_i)-C(\bm{\theta})]
+    /\Delta\theta_i$
+  \State $\gamma_i^{(n)}\leftarrow\gamma_i/n$;\quad
+    $\tilde{\theta}_i \leftarrow \theta_i^{(n-1)}
+    - \gamma_i^{(n)}\,\partial C/\partial\theta_i$
+  \State Nesterov:
+    $q_n\leftarrow(1{+}\sqrt{1{+}4q_{n-1}^2})/2$;\quad
+    $\theta_i^{(n)}\leftarrow\tilde{\theta}_i
+    +\tfrac{q_{n-1}-1}{q_n}(\tilde{\theta}_i{-}\theta_i^{(n-1)})$
+  \State Enforce $R_0^{(n)}\ge R_{\min}$
+\EndFor
+\State Final retrieval with converged~$\bm{\theta}$; hard-threshold at
+$0.5$
+\State \Return
+  $\hat{\mathbf{P}},\hat{v}_x,\hat{v}_y,\hat{z}_T,\hat{R}_0$
+\end{algorithmic}
+\end{algorithm}
+
+%======================================================================
+\section{Scale Ambiguity Analysis}
+\label{sec:ambiguity}
+%======================================================================
+
+(Unchanged from v5.2.)
+
+\subsection{Single-Receiver Ambiguity}
+Under the scaling
+$(v_x,v_y,z_T,x_0)\to(\mu v_x,\mu v_y,\mu z_T,\mu x_0)$,
+$R_0\to\mu^2 R_0$,
+$F'(x',z')=F(x'/\mu,z'/\mu)$,
+the FSSR is unchanged.
+
+\subsection{Ambiguity Breaking with Multiple Nodes}
+With receivers at known, unscaled positions~$\bar{X}_k$:
+$\Delta x_k\to\mu x_T-\bar{X}_k\ne\mu\Delta x_k$ for
+$\bar{X}_k\ne 0$.
+
+%======================================================================
+\section{2D DOA Estimation Algorithms}
+\label{sec:doa_algs}
+%======================================================================
+
+\subsection{2D MUSIC}
+\label{sec:music_2d_alg}
+
+Applied to the phase-compensated covariance~\eqref{eq:cov_compensated}
+of size $N^2\times N^2$.  Noise subspace~$\mathbf{E}_n$;
+pseudo-spectrum:
+\begin{equation}
+  P_{\mathrm{MUSIC}}^{(2D)}(\ell_x,\ell_z)
+  = \frac{1}{\mathbf{a}^H(\ell_x,\ell_z)\,
+  \mathbf{E}_n\mathbf{E}_n^H\,\mathbf{a}(\ell_x,\ell_z)},
+  \label{eq:music_2d_alg}
+\end{equation}
+with $\mathbf{a}(\ell_x,\ell_z)=\mathbf{a}_x(\ell_x)\otimes
+\mathbf{a}_z(\ell_z)$.
+
+\subsection{Separable MUSIC}
+\label{sec:sep_music}
+
+\paragraph{Azimuth:} MUSIC on
+$\mathbf{R}_x\in\C^{N\times N}$~\eqref{eq:Rx}:
+\begin{equation}
+  P_x(\ell_x) = \frac{1}{\mathbf{a}_x^H(\ell_x)\,
+  \mathbf{E}_{n,x}\mathbf{E}_{n,x}^H\,\mathbf{a}_x(\ell_x)}.
+  \label{eq:music_x}
+\end{equation}
+
+\paragraph{Elevation:} MUSIC on
+$\mathbf{R}_z\in\C^{N\times N}$~\eqref{eq:Rz}:
+\begin{equation}
+  P_z(\ell_z) = \frac{1}{\mathbf{a}_z^H(\ell_z)\,
+  \mathbf{E}_{n,z}\mathbf{E}_{n,z}^H\,\mathbf{a}_z(\ell_z)}.
+  \label{eq:music_z}
+\end{equation}
+
+\subsection{LS-ESPRIT (1D and 2D)}
+\label{sec:esprit}
+
+\paragraph{1D LS-ESPRIT (per dimension).}
+Signal subspace $\mathbf{E}_s$; subarrays
+$\mathbf{E}_1=\mathbf{E}_s(1{:}N{-}1,:)$,
+$\mathbf{E}_2=\mathbf{E}_s(2{:}N,:)$;
+$\bm{\Phi}=\mathbf{E}_1^\dagger\mathbf{E}_2$;
+$\hat{\ell}=\angle\lambda_1/\pi$.
+
+Applied separately to $\mathbf{R}_x$ (for $\hat{\ell}_x$) and
+$\mathbf{R}_z$ (for $\hat{\ell}_z$).
+
+\paragraph{2D LS-ESPRIT.}
+Applied to the full $N^2\times N^2$ covariance with selection
+matrices as described in Section~\ref{sec:2d_esprit}.
+
+\subsection{Exact DOA-to-Position Inversion}
+\begin{align}
+  \Delta x_k &= \frac{R(t)\,\hat{\ell}_x}
+  {\sqrt{1-\hat{\ell}_x^2-\hat{\ell}_z^2}},
+  \label{eq:exact_inv_x}\\
+  z_T &= \frac{R(t)\,\hat{\ell}_z}
+  {\sqrt{1-\hat{\ell}_x^2-\hat{\ell}_z^2}}.
+  \label{eq:exact_inv_z}
+\end{align}
+
+%======================================================================
+\section{Simulation Parameters}
+\label{sec:params}
+%======================================================================
+
+\begin{table}[H]
+\centering
+\caption{Default simulation parameters (changes from v5.2
+highlighted)}
+\label{tab:params}
+\begin{tabular}{@{}lcll@{}}
+\toprule
+\textbf{Symbol} & \textbf{Default} & \textbf{Description}
+  & \textbf{Change} \\
+\midrule
+$K$ & 4 & Receiver nodes & --- \\
+$N$ & 16 & Elements per dimension & --- \\
+$N^2$ & 256 & Total elements per node & \textbf{new} \\
+$R_0$ & $10^4$ & Nominal propagation distance ($\lambda$) & --- \\
+$x_0$ & 2000 & Initial target $x$-coordinate & --- \\
+$v$ & 1.0 & Target speed ($\lambda$/time) & --- \\
+$\theta$ & 0 & Heading angle from $x$-axis & --- \\
+$z_T$ & 10 & Constant $z$-offset (altitude) & --- \\
+$M_z{\times}M_x$ & $20{\times}20$ & Pixel grid & --- \\
+$2\delta$ & 10 & Pixel side ($\lambda$) & --- \\
+$\xi_{\mathrm{th}}$ & 2.0 & Zone threshold & --- \\
+SNR & 20\,dB & Per-element SNR & --- \\
+\midrule
+$\gamma$ & 5000 & Profile step size & --- \\
+$\tau$ & $10^{-6}$ & TV regularisation & --- \\
+$N_S$ & 200 & Profile iterations & --- \\
+$N_D$ & 20 & Denoising iterations & --- \\
+$N_V$ & 20 & Outer parameter iterations & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%======================================================================
+\section{Processing Pipeline Summary}
+\label{sec:pipeline}
+%======================================================================
+
+\begin{enumerate}
+  \item \textbf{FSSR Generation.}
+    \begin{enumerate}
+      \item For each time step~$t_m$: compute $R(t_m)=R_0-v_y t_m$
+        and $\Delta x_k(t_m)=x_0+v_x t_m-\bar{X}_k$.
+      \item For each pixel column~$q$: compute
+        $R_{\mathrm{eff},q}(t_m)=R(t_m)-X'_q\tan\theta$.
+      \item Compute $F_q^{(k)}(t_m)$, $G_{p,q}(t_m)$, and
+        $H_{k,p,q}(t_m)$.
+      \item True FSSR: $\varepsilon_k(t_m)=|1+\sum_{p,q}
+        H_{k,p,q}P_{p,q}|^2$.
+      \item Generate noisy signals~\eqref{eq:rx_signal} at all $N^2$
+        elements; measure
+        $b_k(t_m)=|\tilde{y}_k(t_m)|^2$~\eqref{eq:fssr_measured}
+        via 2D beamforming.
+    \end{enumerate}
+
+  \item \textbf{Zone Classification.}
+    $\xi_k(t)=|\Delta x_k(t)|/\sqrt{R(t)}$; Zone~B/A per node.
+
+  \item \textbf{Zone~B.}
+    \begin{enumerate}
+      \item Pass~1: uncompensated covariance ($M\le
+        M_{\max}^{(\mathrm{unc})}$); rough 2D DOA
+        $(\hat{\ell}_x,\hat{\ell}_z)$ via separable or joint MUSIC.
+      \item Pass~2+: phase-compensated covariance ($M\le
+        M_{\mathrm{opt}}$); refined 2D DOA.
+      \item Azimuth analysis: fit $\hat{\beta}_k$ vs.\ $\bar{X}_k$
+        to extract $\hat{a},\hat{b}$.
+      \item Doppler via STFT on 2D-steered beam; extract
+        $\hat{\dot{f}}_k$.
+      \item Estimate $\hat{v}_x,\hat{v}_y,\hat{R}_0,\hat{x}_0$.
+      \item \textbf{Altitude from elevation DOA:}
+        $\hat{z}_T^{(\mathrm{B})}=\hat{\alpha}_z\,\hat{R}_0$
+        \hfill(\textbf{new in v6})
+    \end{enumerate}
+
+  \item \textbf{Zone~A.}
+    \begin{enumerate}
+      \item Collect $b_{k,\ell}$ via 2D beamforming at each node.
+      \item Build coefficient matrices $\mathbf{H}_k(t_\ell)$ using
+        $R_{\mathrm{eff},q}=\hat{R}(t_\ell)-X'_q\tan\hat{\theta}$.
+      \item Algorithm~\ref{alg:joint_estimation}: joint retrieval of
+        $\hat{\mathbf{P}}$ and refined parameters, \textbf{initialised
+        with $\hat{z}_T^{(\mathrm{B})}$} from Zone~B elevation DOA.
+    \end{enumerate}
+
+  \item \textbf{Output.}
+    $\hat{\mathbf{P}}\in\{0,1\}^{M_z\times M_x}$;\;
+    $\hat{v}_x,\hat{v}_y,\hat{z}_T,\hat{R}_0$.
+\end{enumerate}
+
+%======================================================================
+\section{Summary of Changes from v5.2}
+\label{sec:changes}
+%======================================================================
+
+\begin{table}[H]
+\centering
+\caption{Summary of v5.2~$\to$~v6 changes}
+\label{tab:changes}
+\begin{tabular}{@{}p{3.5cm}p{5cm}p{5cm}@{}}
+\toprule
+\textbf{Component} & \textbf{v5.2} & \textbf{v6} \\
+\midrule
+Array geometry & $N$-element ULA along $x$ &
+  $N\times N$ URA in $x$--$z$ plane \\
+Elements per node & $N$ & $N^2$ \\
+Beamformed noise & $\sigma^2/N$ & $\sigma^2/N^2$ \\
+Measurable DOA & $\ell_x$ only &
+  $(\ell_x,\ell_z)$ both \\
+Zone~B $z_T$ estimation & $z_T=0$ default &
+  $\hat{z}_T^{(\mathrm{B})}=\hat{\ell}_z\hat{R}_0$ from
+  elevation DOA \\
+Zone~A $z_T$ initialisation &
+  $z_T^{(0)}=0$ &
+  $z_T^{(0)}=\hat{z}_T^{(\mathrm{B})}$ \\
+Steering vector & $\mathbf{a}_x(\ell_x)\in\C^N$ &
+  $\mathbf{a}_x(\ell_x)\otimes\mathbf{a}_z(\ell_z)\in\C^{N^2}$ \\
+DOA algorithms & 1D MUSIC, 1D LS-ESPRIT &
+  2D MUSIC (joint/separable), 2D LS-ESPRIT \\
+Steered beam (Doppler) & 1D steering &
+  2D steering ($+10\log_{10}N$\,dB gain) \\
+FSSR model & Unchanged & Unchanged \\
+3D target model & Unchanged & Unchanged \\
+Zone~A algorithms & Unchanged & Unchanged \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{thebibliography}{9}
+
+\bibitem{Paper1}
+X.~Shen and D.~Huang,
+``Pixel based shadow profile retrieval in forward scatter radar using
+forward scatter shadow ratio,''
+\emph{IEEE Access}, vol.~12, pp.~60467--60474, 2024.
+
+\bibitem{Draft5}
+X.~Shen and D.~Huang,
+``A gradient-based method with denoising for target shadow profile
+retrieval in forward scatter radar,''
+submitted, 2025.
+
+\bibitem{IETDraft4}
+X.~Shen and D.~Huang,
+``Retrieving target motion parameters together with target shadow
+profile in forward scatter radar,''
+submitted to \emph{IET Radar, Sonar \& Navigation}, 2025.
+
+\end{thebibliography}
+
+\end{document}
