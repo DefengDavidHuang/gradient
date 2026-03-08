@@ -1,219 +1,200 @@
 """
-fresnel.py - Fresnel Diffraction Integrals and FSSR Computation (v5)
-====================================================================
+fresnel.py — Fresnel Diffraction Integrals and FSSR Computation (v9)
+=====================================================================
 
-FSSR model for target moving in x-direction with constant z_T:
+Implements the separable FSSR model from Section 3 of the v9 document.
 
-    ε_k(t) = |1 + (i/R) Σ_{p,q} F_q^(k)(t) · G_p · P_{p,q}|²
-
-where:
-    F_q^(k)(t): x-integral, TIME-VARYING (depends on Δx_k(t) = x_T(t) - X_k)
-    G_p:        z-integral, CONSTANT (depends on z_T)
-
-This is the reverse of v4 where F_q was constant and G_p was time-varying.
-All coordinates normalised to wavelength λ.
+Key equations
+-------------
+- Eq. (6):  F_q^{(k)}(t)  — x-direction Fresnel coefficient
+- Eq. (7):  G_p(t)        — z-direction Fresnel coefficient
+- Eq. (9):  S_k(t) = (i/R(t)) G(t)^T P F^{(k)}(t)
+- Eq. (10): ε_k(t) = |1 + S_k(t)|²
 """
+
+from __future__ import annotations
 
 import warnings
 import numpy as np
 from scipy.special import erfi, erf
-from typing import Tuple
+from typing import Tuple, List
 
 from .geometry import ArrayNode, Target, SystemConfig
 
 
-def _fresnel_diff(sqrt_factor: complex, prefactor: complex,
-                  centre: float, delta: float, offset: float) -> complex:
-    """
-    Numerically stable computation of:
-        prefactor * [erfi(sqrt_factor*(centre + delta + offset))
-                   - erfi(sqrt_factor*(centre - delta + offset))]
+# =====================================================================
+# Low-level Fresnel helpers
+# =====================================================================
 
-    Uses erfi(z) = -i * erf(i*z) fallback for overflow.
-    """
-    a = sqrt_factor * (centre + delta + offset)
-    b = sqrt_factor * (centre - delta + offset)
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            val_a = erfi(a)
-            val_b = erfi(b)
-            result = prefactor * (val_a - val_b)
-            if np.isfinite(result):
-                return result
-    except (OverflowError, FloatingPointError):
-        pass
-
-    erf_ia = erf(1j * a)
-    erf_ib = erf(1j * b)
-    result = prefactor * 1j * (erf_ib - erf_ia)
-    if np.isfinite(result):
-        return result
-
-    return 0.0 + 0.0j
-
-
-def fresnel_coeff_x(x_prime_centre: float, delta: float, x_offset: float,
-                    R: float) -> complex:
-    """
-    Compute the x-direction Fresnel coefficient for a single pixel.
-
-    F_q^(k)(t) at a given time when Δx_k(t) = x_offset.
-    Phase argument: (x_T(t) - X_k + x') → offset = x_T(t) - X_k.
-    """
-    sqrt_factor = np.sqrt(1j * np.pi / R)
-    prefactor = np.sqrt(R / (4j))
-    return _fresnel_diff(sqrt_factor, prefactor,
-                         x_prime_centre, delta, x_offset)
-
-
-def fresnel_coeff_z(z_prime_centre: float, delta: float, z_T: float,
-                    R: float) -> complex:
-    """
-    Compute the z-direction Fresnel coefficient for a single pixel.
-
-    G_p depends on constant z_T.
-    """
-    sqrt_factor = np.sqrt(1j * np.pi / R)
-    prefactor = np.sqrt(R / (4j))
-    return _fresnel_diff(sqrt_factor, prefactor,
-                         z_prime_centre, delta, z_T)
-
-
-def compute_fresnel_coefficients(
-    node: ArrayNode,
-    target: Target,
-    x_T_values: np.ndarray,
-    R_override: float = None,
-    v_x_override: float = None,
-    x_0_override: float = None,
-    z_T_override: float = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Pre-compute all Fresnel coefficients F_q^(k)(t_m) and G_p for a given node.
-
-    In v5: F_q is (M, M_x) time-varying, G_p is (M_z,) constant.
-
-    Parameters
-    ----------
-    node : ArrayNode
-    target : Target
-        Provides pixel grid and z_T.
-    x_T_values : np.ndarray, shape (M,)
-        Target x-coordinates at each time step.
-    R_override : float, optional
-        Override node.R (for estimated R).
-    v_x_override, x_0_override, z_T_override : float, optional
-        Not used for coefficient computation directly (x_T_values
-        already encodes the trajectory), but z_T_override overrides
-        the z-offset.
-
-    Returns
-    -------
-    F_q : np.ndarray, shape (M, M_x). Complex. Time-varying x-coefficients.
-    G_p : np.ndarray, shape (M_z,). Complex. Constant z-coefficients.
-    """
-    delta = target.pixel_size / 2.0
-    R = R_override if R_override is not None else node.R
-    z_T = z_T_override if z_T_override is not None else target.z_T
-
-    M_x = len(target.pixel_centres_x)
-    M_z = len(target.pixel_centres_z)
-    M = len(x_T_values)
-
-    # G_p: constant z-coefficients (depends on z_T only)
-    G_p = np.array([
-        fresnel_coeff_z(zp, delta, z_T, R)
-        for zp in target.pixel_centres_z
-    ])
-
-    # F_q^(k)(t_m): time-varying x-coefficients
-    F_q = np.zeros((M, M_x), dtype=complex)
-    for m, x_T in enumerate(x_T_values):
-        x_offset = x_T - node.x_centre
-        for q, xq in enumerate(target.pixel_centres_x):
-            F_q[m, q] = fresnel_coeff_x(xq, delta, x_offset, R)
-
-    # Replace overflow artefacts
-    F_q = np.nan_to_num(F_q, nan=0.0, posinf=0.0, neginf=0.0)
-    G_p = np.nan_to_num(G_p, nan=0.0, posinf=0.0, neginf=0.0)
-
-    return F_q, G_p
-
-
-def compute_fssr_model_vectorised(
-    F_q: np.ndarray,
-    G_p: np.ndarray,
-    P: np.ndarray,
-    R: float,
-) -> np.ndarray:
-    """
-    Vectorised FSSR model computation for v5.
-
-    Parameters
-    ----------
-    F_q : np.ndarray, shape (M, M_x) — time-varying x-coefficients
-    G_p : np.ndarray, shape (M_z,) — constant z-coefficients
-    P : np.ndarray, shape (M_z, M_x) — pixel values
-    R : float
-
-    Returns
-    -------
-    np.ndarray, shape (M,)
-    """
-    # GP = G_p^T @ P → shape (M_x,)
-    # Projects out the z-dimension using constant G_p
-    GP = G_p @ P  # (M_z,) @ (M_z, M_x) = (M_x,)
-
-    # inner = F_q @ GP → shape (M,)
-    # Each time step: sum over x-pixels
+def _erfi_safe(z: complex | np.ndarray) -> complex | np.ndarray:
+    """Compute erfi(z) with overflow fallback via erf(iz)."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        inner = F_q @ GP  # (M, M_x) @ (M_x,) = (M,)
+        val = erfi(z)
+    if np.all(np.isfinite(val)):
+        return val
+    # Fallback: erfi(z) = -i·erf(i·z)
+    return -1j * erf(1j * z)
 
-    inner = np.nan_to_num(inner, nan=0.0, posinf=0.0, neginf=0.0)
-    fssr = np.abs(1.0 + (1j / R) * inner) ** 2
-    return fssr
 
+def _fresnel_coeff(centre: float, delta: float, offset: float,
+                   R: float) -> complex:
+    r"""Compute one Fresnel coefficient (eq. 6 or 7).
 
-def compute_fssr_direct(
-    node: ArrayNode,
-    target: Target,
-    x_T_values: np.ndarray,
-    R_override: float = None,
-    z_T_override: float = None,
-) -> np.ndarray:
+    .. math::
+
+        \sqrt{R/(4i)}\,\bigl[\mathrm{erfi}(\sqrt{i\pi/R}\,(c+\delta+o))
+        - \mathrm{erfi}(\sqrt{i\pi/R}\,(c-\delta+o))\bigr]
+
+    Parameters
+    ----------
+    centre : float
+        Pixel centre (X'_q or Z'_p).
+    delta : float
+        Pixel half-width δ.
+    offset : float
+        Δx_k(t) (for x) or z_T (for z).
+    R : float
+        Propagation distance R(t).
     """
-    Compute FSSR directly from the Fresnel integral.
+    sqrt_fac = np.sqrt(1j * np.pi / R)
+    prefactor = np.sqrt(R / 4j)
+    a = sqrt_fac * (centre + delta + offset)
+    b = sqrt_fac * (centre - delta + offset)
+    result = prefactor * (_erfi_safe(a) - _erfi_safe(b))
+    return complex(np.nan_to_num(result, nan=0.0))
+
+
+def fresnel_coeff_x(xp: float, delta: float, dx_k: float,
+                    R: float) -> complex:
+    """x-direction coefficient F_q^{(k)}(t), eq. (6)."""
+    return _fresnel_coeff(xp, delta, dx_k, R)
+
+
+def fresnel_coeff_z(zp: float, delta: float, z_T: float,
+                    R: float) -> complex:
+    """z-direction coefficient G_p(t), eq. (7)."""
+    return _fresnel_coeff(zp, delta, z_T, R)
+
+
+# =====================================================================
+# Vectorised coefficient builders
+# =====================================================================
+
+def build_F_vectors(node: ArrayNode, target: Target,
+                    t_values: np.ndarray, R_0: float,
+                    x_0: float | None = None,
+                    v_x: float | None = None,
+                    v_y: float | None = None) -> np.ndarray:
+    r"""Build x-direction Fresnel vectors for every time step.
+
+    Returns F_q^{(k)}(t_m) as shape ``(M, M_x)``.
 
     Parameters
     ----------
     node : ArrayNode
     target : Target
-    x_T_values : np.ndarray, shape (M,)
-        Target x-coordinates at each time step.
+        Provides pixel grid (pixel_centres_x, pixel_size).
+    t_values : np.ndarray, shape (M,)
+    R_0 : float
+    x_0, v_x, v_y : float or None
+        Override target kinematics if given.
+    """
+    _x0 = x_0 if x_0 is not None else target.x_0
+    _vx = v_x if v_x is not None else target.v_x
+    _vy = v_y if v_y is not None else target.v_y
+    delta = target.delta
+    cx = target.pixel_centres_x
+    M = len(t_values)
+    M_x = len(cx)
+    F = np.zeros((M, M_x), dtype=complex)
+    for m, t in enumerate(t_values):
+        Rt = R_0 - _vy * t
+        dx_k = _x0 + _vx * t - node.x_centre
+        for q in range(M_x):
+            F[m, q] = fresnel_coeff_x(cx[q], delta, dx_k, Rt)
+    F = np.nan_to_num(F, nan=0.0, posinf=0.0, neginf=0.0)
+    return F
+
+
+def build_G_vector(target: Target, t_values: np.ndarray, R_0: float,
+                   z_T: float | None = None,
+                   v_y: float | None = None) -> np.ndarray:
+    r"""Build z-direction Fresnel vectors for every time step.
+
+    Returns G_p(t_m) as shape ``(M, M_z)``.
+
+    Under the v9 simplification R(t) varies with time so G_p is also
+    time-varying (it depends on R(t)).  When v_y ≈ 0 the variation is
+    negligible but we compute it correctly regardless.
+    """
+    _vy = v_y if v_y is not None else target.v_y
+    _zT = z_T if z_T is not None else target.z_T
+    delta = target.delta
+    cz = target.pixel_centres_z
+    M = len(t_values)
+    M_z = len(cz)
+    G = np.zeros((M, M_z), dtype=complex)
+    for m, t in enumerate(t_values):
+        Rt = R_0 - _vy * t
+        for p in range(M_z):
+            G[m, p] = fresnel_coeff_z(cz[p], delta, _zT, Rt)
+    G = np.nan_to_num(G, nan=0.0, posinf=0.0, neginf=0.0)
+    return G
+
+
+# =====================================================================
+# FSSR computation
+# =====================================================================
+
+def compute_fssr(F: np.ndarray, G: np.ndarray,
+                 P: np.ndarray, R_values: np.ndarray) -> np.ndarray:
+    r"""Vectorised FSSR, eqs. (9)–(10).
+
+    Parameters
+    ----------
+    F : (M, M_x)  — F_q^{(k)}(t_m)
+    G : (M, M_z)  — G_p(t_m)
+    P : (M_z, M_x)
+    R_values : (M,)  — R(t_m)
 
     Returns
     -------
-    np.ndarray, shape (M,)
+    epsilon : (M,)
     """
-    R = R_override if R_override is not None else node.R
-    F_q, G_p = compute_fresnel_coefficients(
-        node, target, x_T_values,
-        R_override=R_override, z_T_override=z_T_override
-    )
-    return compute_fssr_model_vectorised(F_q, G_p, target.silhouette, R)
+    M = F.shape[0]
+    eps = np.empty(M)
+    for m in range(M):
+        GP = G[m] @ P          # (M_x,)
+        inner = F[m] @ GP      # scalar
+        S = 1j / R_values[m] * inner
+        eps[m] = abs(1.0 + S) ** 2
+    return eps
 
 
-def add_noise_to_fssr(fssr: np.ndarray, snr_db: float) -> np.ndarray:
-    """
-    Add AWGN to FSSR observations.
+def compute_fssr_for_node(node: ArrayNode, target: Target,
+                          t_values: np.ndarray, R_0: float,
+                          x_0: float | None = None,
+                          v_x: float | None = None,
+                          v_y: float | None = None,
+                          z_T: float | None = None) -> np.ndarray:
+    """Convenience: compute FSSR time series for one node."""
+    _vy = v_y if v_y is not None else target.v_y
+    Rv = R_0 - _vy * t_values
+    F = build_F_vectors(node, target, t_values, R_0,
+                        x_0=x_0, v_x=v_x, v_y=v_y)
+    G = build_G_vector(target, t_values, R_0, z_T=z_T, v_y=v_y)
+    return compute_fssr(F, G, target.silhouette, Rv)
 
-    SNR is defined relative to the direct path power (= 1 in normalised units):
-        SNR = 1 / sigma^2  →  sigma^2 = 10^(-SNR_dB/10)
-    """
-    snr_linear = 10 ** (snr_db / 10)
-    sigma = np.sqrt(1.0 / snr_linear)
-    noise = np.random.normal(0, sigma, size=fssr.shape)
+
+# =====================================================================
+# Noise
+# =====================================================================
+
+def add_fssr_noise(fssr: np.ndarray, snr_db: float) -> np.ndarray:
+    """Add AWGN to measured FSSR (after beamforming)."""
+    sigma2 = 10.0 ** (-snr_db / 10.0)
+    # Beamformed noise variance is σ²/N² but we measure |1+S+η|²;
+    # for simplicity add Gaussian noise to the power measurement.
+    noise = np.random.normal(0, np.sqrt(sigma2), size=fssr.shape)
     return fssr + noise

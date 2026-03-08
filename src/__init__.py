@@ -1,31 +1,26 @@
 """
-Distributed Phased Array Forward Scatter Radar (FSR) Simulation
-===============================================================
+Distributed Phased Array Forward Scatter Radar (FSR) Simulation — v9
+=====================================================================
 
-This package simulates a distributed phased array FSR system with a single
-target transitioning from Zone B (off-baseline, DOA estimation) to Zone A
-(on-baseline, shadow profile retrieval via FSSR).
+A complete simulation of a distributed phased-array FSR system where a
+three-dimensional rigid-body target moves obliquely across a baseline of
+K planar (N×N) receive arrays.
 
-The coordinate system follows [Paper 1]:
-    - Plane wave incident in +y direction (TX at y → -∞)
-    - Receivers at (X_k, R, 0), arrays along x-axis, perpendicular to incident wave
-    - Target at (x_T, 0, z_T(t)), moves in z-direction with constant x_T
+Modules
+-------
+geometry        System geometry, coordinate definitions, target motion
+fresnel         Fresnel diffraction integrals and FSSR computation
+signal          Element-level signal generation and beamforming
+zone_b          Zone B processing: 2-D DOA, Doppler, joint NLS
+zone_a          Zone A processing: gradient descent + TV denoising
+pipeline        End-to-end simulation pipeline
+visualisation   Plotting and result visualisation
 
-Modules:
-    geometry.py     - System geometry and coordinate definitions
-    fresnel.py      - Fresnel diffraction integrals and FSSR computation
-    zone_b.py       - Zone B processing: DOA estimation, Doppler analysis
-    zone_a.py       - Zone A processing: pixel-based shadow profile retrieval
-    simulation.py   - Main simulation runner (Zone B → Zone A transition)
-    visualisation.py - Plotting and result visualisation
-
-References:
-    [Paper 1] X. Shen and D. Huang, "Pixel Based Shadow Profile Retrieval in
-              Forward Scatter Radar Using Forward Scatter Shadow Ratio,"
-              IEEE Access, vol. 12, pp. 60467-60474, 2024.
-    [Paper 2] A. Ajorloo, Y. Qin, and F. Colone, "Multichannel Forward Scatter
-              Radar Using Arbitrary Waveforms," IEEE Trans. Aerosp. Electron.
-              Syst., vol. 61, no. 6, pp. 17858-17878, Dec. 2025.
+References
+----------
+[1] X. Shen and D. Huang, IEEE Access 12, 60467–60474, 2024.
+[2] X. Shen and D. Huang, submitted, 2025.
+[3] X. Shen and D. Huang, submitted to IET RSN, 2025.
 """
 
-__version__ = "0.1.0"
+__version__ = "9.0.0"

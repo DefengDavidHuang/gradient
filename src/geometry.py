@@ -1,194 +1,295 @@
 """
-geometry.py - System Geometry and Coordinate Definitions (v5)
+geometry.py — System Geometry and Coordinate Definitions (v9)
 =============================================================
 
-Coordinate system:
-    - Plane wave in +y direction
-    - K phased array nodes at (X_k, R, 0), each with N elements along x
-    - Target at (x_T(t), 0, z_T) moving in x-direction: x_T(t) = x_0 + v_x*t
-    - z_T is a constant offset in z
-    - All distances normalised to lambda (so lambda = 1)
+Coordinate system (Section 1 of v9_model_and_algorithms.tex):
+    - Plane wave illuminator in the +y direction.
+    - K receive nodes along the x-axis at y = R_0.
+    - Each node carries an N×N URA in the x–z plane, element spacing d = λ/2.
+    - Element (n_x, n_z) of node k is at (X̄_k + n_x·d, R_0, n_z·d).
+    - Vector index: n_x·N + n_z  (azimuth outer, elevation inner).
 
-Key change from v4: target moves in x (not z), with constant z_T.
-Node spacing = sqrt(R) / 2 (half Fresnel zone radius).
+Target motion (Section 1.4):
+    - Centre at (x_T(t), y_T(t), z_T) with constant altitude z_T.
+    - x_T(t) = x_0 + v_x·t,   v_x = v·cos(θ)
+    - y_T(t) = v_y·t,          v_y = v·sin(θ)
+    - R(t) = R_0 − v_y·t       (propagation distance along y)
+
+All lengths normalised to λ ⟹ λ = 1, d = 0.5.
 """
+
+from __future__ import annotations
 
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
+
+# =====================================================================
+# Data classes
+# =====================================================================
 
 @dataclass
 class ArrayNode:
-    """A single phased array node."""
+    """One N×N URA receive node.
+
+    Attributes
+    ----------
+    x_centre : float
+        Centre x-coordinate X̄_k (in λ).
+    R_0 : float
+        Nominal propagation distance (y-position of receiver plane).
+    N : int
+        Elements per dimension (N×N total).
+    d : float
+        Element spacing (default λ/2 = 0.5).
+    """
     x_centre: float
-    R: float
+    R_0: float
     N: int = 16
-    d: float = 0.5  # lambda/2
+    d: float = 0.5
 
     @property
-    def element_positions(self) -> np.ndarray:
-        return self.x_centre + np.arange(self.N) * self.d
+    def N2(self) -> int:
+        """Total number of elements."""
+        return self.N * self.N
 
-    @property
-    def aperture(self) -> float:
-        return (self.N - 1) * self.d
+    def element_x(self, n_x: int) -> float:
+        """x-coordinate of element row *n_x*."""
+        return self.x_centre + n_x * self.d
+
+    def element_z(self, n_z: int) -> float:
+        """z-coordinate of element column *n_z*."""
+        return n_z * self.d
 
     @property
     def fresnel_zone_radius(self) -> float:
-        return np.sqrt(self.R)
+        return np.sqrt(self.R_0)
 
 
 @dataclass
 class Target:
-    """A single 2D target with shadow silhouette, moving in x-direction."""
-    x_0: float           # initial x-coordinate
-    v_x: float           # velocity in x-direction (wavelengths per time unit)
-    z_T: float           # constant z-offset (wavelengths)
-    silhouette: np.ndarray = None
-    pixel_size: float = 10.0
-    pixel_centres_x: np.ndarray = None
-    pixel_centres_z: np.ndarray = None
+    """Rigid-body target with oblique heading.
 
-    def x_T(self, t: float) -> float:
-        """Target x-coordinate at time t."""
+    Parameters match Table 1 of the v9 document.
+    """
+    x_0: float           # initial x-coordinate
+    v: float             # speed (λ / time-unit)
+    theta: float         # heading angle (rad), 0 = pure +x
+    z_T: float           # constant altitude
+    silhouette: Optional[np.ndarray] = None   # M_z × M_x binary
+    pixel_size: float = 10.0                  # 2δ
+    pixel_centres_x: Optional[np.ndarray] = None  # X'_q
+    pixel_centres_z: Optional[np.ndarray] = None  # Z'_p
+
+    # Derived -----------------------------------------------------------
+    @property
+    def v_x(self) -> float:
+        return self.v * np.cos(self.theta)
+
+    @property
+    def v_y(self) -> float:
+        return self.v * np.sin(self.theta)
+
+    @property
+    def delta(self) -> float:
+        """Pixel half-width δ."""
+        return self.pixel_size / 2.0
+
+    # Kinematics --------------------------------------------------------
+    def x_T(self, t: float | np.ndarray) -> float | np.ndarray:
+        """x_T(t) = x_0 + v_x·t."""
         return self.x_0 + self.v_x * t
 
-    def xi_at_node(self, t: float, node_x: float, R: float) -> float:
-        """Fresnel zone parameter ξ_k(t) = |x_T(t) - X_k| / sqrt(R)."""
-        return abs(self.x_T(t) - node_x) / np.sqrt(R)
+    def y_T(self, t: float | np.ndarray) -> float | np.ndarray:
+        """y_T(t) = v_y·t."""
+        return self.v_y * t
+
+    def R(self, t: float | np.ndarray, R_0: float | None = None) -> float | np.ndarray:
+        """R(t) = R_0 − v_y·t."""
+        if R_0 is None:
+            raise ValueError("R_0 must be provided")
+        return R_0 - self.v_y * t
+
+    def delta_x_k(self, t: float | np.ndarray, X_k: float,
+                  R_0: float | None = None) -> float | np.ndarray:
+        """Δx_k(t) = x_T(t) − X̄_k."""
+        return self.x_T(t) - X_k
+
+    def xi_k(self, t: float | np.ndarray, X_k: float,
+             R_0: float) -> float | np.ndarray:
+        """Fresnel parameter ξ_k(t) = |Δx_k(t)| / √R(t)."""
+        dx = self.delta_x_k(t, X_k)
+        Rt = self.R(t, R_0)
+        return np.abs(dx) / np.sqrt(np.maximum(Rt, 1.0))
 
 
 @dataclass
 class SystemConfig:
     """Complete system configuration."""
     nodes: List[ArrayNode] = field(default_factory=list)
-    target: Target = None
-    fc_ghz: float = 30.0
+    target: Optional[Target] = None
+    R_0: float = 1e4
+    delta_node: float = 50.0   # inter-node spacing
+    dt: float = 1.0            # snapshot interval
     xi_threshold: float = 2.0
     snr_db: float = 20.0
-
-    @property
-    def wavelength_m(self) -> float:
-        return 3e8 / (self.fc_ghz * 1e9)
+    M_z: int = 20
+    M_x: int = 20
+    # Algorithm hyper-parameters
+    gamma_profile: float = 5000.0
+    tau: float = 1e-6
+    N_S: int = 200
+    N_D: int = 20
+    N_V: int = 20
 
     @property
     def K(self) -> int:
         return len(self.nodes)
 
+    @property
+    def N(self) -> int:
+        return self.nodes[0].N if self.nodes else 16
+
+    @property
+    def sigma2(self) -> float:
+        """Noise variance σ² = 10^(−SNR_dB/10)."""
+        return 10.0 ** (-self.snr_db / 10.0)
+
+
+# =====================================================================
+# Factory
+# =====================================================================
 
 def create_system(
     K: int = 4,
     N: int = 16,
-    R: float = 1e4,
+    R_0: float = 1e4,
+    delta_node: float | None = None,
     x_0: float = 2000.0,
-    v_x: float = -1.0,
+    v: float = 1.0,
+    theta: float = 0.0,
     z_T: float = 10.0,
+    dt: float = 1.0,
     target_shape: str = "rectangle",
     target_width: float = 100.0,
     target_height: float = 80.0,
-    M_pixels: int = 20,
+    M_z: int = 20,
+    M_x: int = 20,
     pixel_size: float = 10.0,
     snr_db: float = 20.0,
     xi_threshold: float = 2.0,
+    gamma_profile: float = 5000.0,
+    tau: float = 1e-6,
+    N_S: int = 200,
+    N_D: int = 20,
+    N_V: int = 20,
 ) -> SystemConfig:
-    """
-    Create system with uniform node spacing = sqrt(R) / 2.
+    """Create a v9 system configuration.
 
     Parameters
     ----------
     K : int
-        Number of nodes.
+        Number of receiver nodes.
     N : int
-        Elements per node.
-    R : float
-        Target-to-receiver distance (wavelengths).
+        Elements per array dimension (N×N total per node).
+    R_0 : float
+        Nominal propagation distance (λ).
+    delta_node : float or None
+        Inter-node spacing.  Default √R_0 / 2.
     x_0 : float
-        Target initial x-coordinate (wavelengths).
-    v_x : float
-        Target velocity in x-direction.
+        Initial target x-coordinate.
+    v : float
+        Target speed.
+    theta : float
+        Heading angle (rad), measured from +x toward +y.
     z_T : float
-        Constant z-offset (wavelengths).
+        Target altitude.
+    dt : float
+        Snapshot interval.
     target_shape : str
-        "rectangle", "triangle", or "circle".
-    target_width : float
-        Target width in x' (wavelengths).
-    target_height : float
-        Target height in z' (wavelengths).
-    M_pixels : int
-        Pixels per side.
+        ``"rectangle"``, ``"triangle"``, or ``"circle"``.
+    target_width, target_height : float
+        Shadow dimensions (λ).
+    M_z, M_x : int
+        Pixel grid dimensions.
     pixel_size : float
-        Pixel side length (wavelengths).
+        Pixel side 2δ (λ).
     snr_db : float
-        SNR in dB.
+        Per-element SNR (dB).
     xi_threshold : float
-        Zone transition threshold.
+        Zone B / Zone A boundary.
+    gamma_profile, tau, N_S, N_D, N_V : float / int
+        Algorithm hyper-parameters (see Table 1).
 
     Returns
     -------
     SystemConfig
     """
-    r_F = np.sqrt(R)
-    spacing = r_F / 2.0
+    if delta_node is None:
+        delta_node = np.sqrt(R_0) / 2.0
 
+    # --- Nodes (eq. 2) ---
     nodes = []
     for k in range(K):
-        x_k = (k - (K - 1) / 2) * spacing
-        nodes.append(ArrayNode(x_centre=x_k, R=R, N=N))
+        X_k = (k - (K - 1) / 2.0) * delta_node
+        nodes.append(ArrayNode(x_centre=X_k, R_0=R_0, N=N))
 
-    half_grid = M_pixels / 2
-    centres_x = (np.arange(M_pixels) - half_grid + 0.5) * pixel_size
-    centres_z = (np.arange(M_pixels) - half_grid + 0.5) * pixel_size
+    # --- Pixel grid ---
+    half_x = M_x / 2.0
+    half_z = M_z / 2.0
+    centres_x = (np.arange(M_x) - half_x + 0.5) * pixel_size  # X'_q
+    centres_z = (np.arange(M_z) - half_z + 0.5) * pixel_size  # Z'_p
 
     silhouette = _create_silhouette(
         target_shape, target_width, target_height,
-        centres_x, centres_z, pixel_size
+        centres_x, centres_z,
     )
 
     target = Target(
-        x_0=x_0, v_x=v_x, z_T=z_T,
+        x_0=x_0, v=v, theta=theta, z_T=z_T,
         silhouette=silhouette,
         pixel_size=pixel_size,
         pixel_centres_x=centres_x,
         pixel_centres_z=centres_z,
     )
 
-    config = SystemConfig(
-        nodes=nodes, target=target, fc_ghz=30.0,
+    return SystemConfig(
+        nodes=nodes, target=target, R_0=R_0,
+        delta_node=delta_node, dt=dt,
         xi_threshold=xi_threshold, snr_db=snr_db,
+        M_z=M_z, M_x=M_x,
+        gamma_profile=gamma_profile, tau=tau,
+        N_S=N_S, N_D=N_D, N_V=N_V,
     )
 
-    # Compute M_total for simulation
-    # Target starts at x_0, crosses all nodes, exits the other side
-    # Total time: target traverses from x_0 to -x_0 (symmetric)
-    T_total = abs(2 * x_0 / v_x)
-    z_A_bound = xi_threshold * r_F
-    t_zone_A_approx = 2 * z_A_bound / abs(v_x)
-    n_pixels = M_pixels ** 2
-    M_A_needed = max(int(3 * n_pixels / K), 400)
-    dt_needed = t_zone_A_approx / M_A_needed
-    config._M_total = max(int(T_total / dt_needed), 2000)
 
-    return config
-
-
-def _create_silhouette(shape, width, height, centres_x, centres_z, pixel_size):
-    """Create binary silhouette on the pixel grid."""
-    M_z = len(centres_z)
-    M_x = len(centres_x)
-    silhouette = np.zeros((M_z, M_x))
-    for p, zp in enumerate(centres_z):
-        for q, xq in enumerate(centres_x):
+def _create_silhouette(shape: str, width: float, height: float,
+                       cx: np.ndarray, cz: np.ndarray) -> np.ndarray:
+    """Create a binary M_z × M_x silhouette."""
+    M_z, M_x = len(cz), len(cx)
+    P = np.zeros((M_z, M_x))
+    for p, zp in enumerate(cz):
+        for q, xq in enumerate(cx):
             if shape == "rectangle":
                 if abs(xq) <= width / 2 and abs(zp) <= height / 2:
-                    silhouette[p, q] = 1.0
+                    P[p, q] = 1.0
             elif shape == "triangle":
                 if abs(zp) <= height / 2:
                     frac = 1.0 - (zp + height / 2) / height
                     if abs(xq) <= width / 2 * frac:
-                        silhouette[p, q] = 1.0
+                        P[p, q] = 1.0
             elif shape == "circle":
-                r = min(width, height) / 2
-                if xq**2 + zp**2 <= r**2:
-                    silhouette[p, q] = 1.0
-    return silhouette
+                r = min(width, height) / 2.0
+                if xq ** 2 + zp ** 2 <= r ** 2:
+                    P[p, q] = 1.0
+    return P
+
+
+# =====================================================================
+# Utility helpers used elsewhere
+# =====================================================================
+
+def node_positions(cfg: SystemConfig) -> np.ndarray:
+    """Return array of X̄_k values, shape (K,)."""
+    return np.array([n.x_centre for n in cfg.nodes])
